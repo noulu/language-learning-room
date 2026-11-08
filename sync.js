@@ -25,10 +25,28 @@ export class SupabaseSync {
     if(config?.url&&config?.publishableKey){const url=new URL(config.url);if(url.protocol!=='https:'||!url.hostname.endsWith('.supabase.co')||url.pathname!=='/')throw new Error('同步服务地址无效。');const key=config.publishableKey;if(key.startsWith('sb_secret_')||key.startsWith('ey')&&parse(atob(key.split('.')[1].replaceAll('-','+').replaceAll('_','/')))?.role!=='anon')throw new Error('浏览器只能使用公开密钥。');this.configured=true;this.origin=url.origin;}
   }
   status(text,kind='normal'){this.onStatus(text,kind);}
-  async remote(baseline) {
-    const headers={'Content-Type':'application/json'},head=await this.request('/rest/v1/rpc/travel_head',{headers,body:{}});
-    if(baseline&&head.revision===baseline.revision)return {revision:head.revision,payload:baseline.payload};
-    const remote=await this.request('/rest/v1/rpc/travel_read',{headers,body:{}});remote.payload=await unpack(remote.payload);return remote;
+  async remote(baseline, userId) {
+    const headers = { 'Content-Type': 'application/json' };
+    const head = await this.request('/rest/v1/rpc/travel_head', { headers, body: {} });
+    if (baseline && head.revision === baseline.revision) {
+      return { revision: head.revision, payload: baseline.payload };
+    }
+
+    // A conflict or interrupted apply can leave the merge baseline behind.
+    // Reuse the validated cloud response independently of that baseline.
+    const cacheKey = userId && `sync-fetched:${userId}`;
+    const cached = cacheKey ? await this.meta(cacheKey) : null;
+    if (cached && cached.revision === head.revision) {
+      return { revision: cached.revision, payload: await unpack(cached.payload) };
+    }
+
+    const response = await this.request('/rest/v1/rpc/travel_read', { headers, body: {} });
+    const payload = await unpack(response.payload);
+    if (payload) this.validate(payload);
+    if (cacheKey && this.auth?.user?.id === userId) {
+      await this.meta(cacheKey, { revision: response.revision, payload: response.payload });
+    }
+    return { revision: response.revision, payload };
   }
   async writeRemote(revision,payload){return this.request('/rest/v1/rpc/travel_write',{headers:{'Content-Type':'application/json'},body:{expected_revision:revision,new_payload:await pack(payload)}});}
   async meta(key,value) {
@@ -106,7 +124,7 @@ export class SupabaseSync {
     const uid=this.auth.user.id,owner=await this.meta('sync-owner');if(owner&&owner!==uid)throw new Error('同步账号与本机进度所属账号不一致。');
     let baseline=await this.meta(`sync-base:${uid}`);
     for(let attempt=0;attempt<3;attempt++) {
-      const local=await this.snapshot(),remote=await this.remote(baseline);
+      const local=await this.snapshot(),remote=await this.remote(baseline,uid);
       if(remote.payload)this.validate(remote.payload);
       let merged;
       if(!remote.payload)merged=local;
