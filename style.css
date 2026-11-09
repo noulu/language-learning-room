@@ -64,6 +64,7 @@ progress::-moz-progress-bar { background: var(--progress); }
 .ratings { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); width: 100%; height: 100%; gap: 8px; }
 .rating { display: flex; flex-direction: column; text-align: left; gap: 6px; padding: 12px; font-size: 12px; }
 .rating kbd { font-size: 15px; color: var(--green); }
+.rating[data-submitted] { opacity: 1; background: var(--soft); border-color: var(--green); transition: none; }
 kbd { font-family: inherit; }
 .shortcut-hint { text-align: center; color: var(--muted); font-size: 11px; min-height: 40px; padding-top: 16px; }
 .notice { padding: 12px 16px; background: var(--notice); border: 1px solid var(--notice-line); border-radius: 10px; font-size: 13px; margin-bottom: 18px; line-height: 1.5; }

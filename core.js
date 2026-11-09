@@ -1,15 +1,17 @@
 export const languageNames = { en: 'English', ja: '日本語', ko: '한국어', es: 'Español', fr: 'Français', ru: 'Русский', ar: 'العربية', id: 'Bahasa Indonesia', hi: 'हिन्दी · 印地语', zh: '中文' };
 
-export function shortcutAction(event, { revealed, busy, hasTask, dialogOpen, canUndo = false, canPlay = false, recording = false }) {
+export function shortcutAction(event, { revealed, busy, hasTask, dialogOpen, canUndo = false, canPlay = false, recording = false, canRevealWhileSaving = false }) {
   const target = event.target;
-  if (event.repeat || event.isComposing || event.altKey || busy || dialogOpen || recording) return null;
+  if (event.repeat || event.isComposing || event.altKey || dialogOpen || recording) return null;
   if (target?.closest?.('input, textarea, select, button, a, [contenteditable], [role="textbox"]')) return null;
+  const space = event.code === 'Space' || event.key === ' ';
+  if (busy) return canRevealWhileSaving && hasTask && !revealed && !event.ctrlKey && !event.metaKey && space ? { type: 'reveal' } : null;
   const undoKey = event.key === 'Backspace' && !event.ctrlKey && !event.metaKey && !event.shiftKey;
   const undoZ = !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.code === 'KeyZ' || String(event.key).toLowerCase() === 'z');
   if ((undoKey || undoZ) && canUndo) return { type: 'undo' };
   if (event.ctrlKey || event.metaKey || !hasTask) return null;
   if (!event.shiftKey && canPlay && (event.code === 'KeyS' || String(event.key).toLowerCase() === 's')) return { type: 'replay' };
-  if (event.code === 'Space' || event.key === ' ') return revealed ? null : { type: 'reveal' };
+  if (space) return revealed ? null : { type: 'reveal' };
   if (revealed && /^[1-4]$/.test(event.key)) return { type: 'rate', rating: Number(event.key) };
   return null;
 }
@@ -94,14 +96,39 @@ export function reviewSentenceParts(text,targets,languageId){
   if(cursor<text.length)parts.push({text:text.slice(cursor)});return parts;
 }
 
-export async function request(path, options = {}) {
+function requestFailure(status, statusText, data) {
+  const error = new Error(typeof data.error === 'string' ? data.error : data.error?.message || data.message || `${status} ${statusText}`);
+  error.status = status; error.code = data.error?.code;
+  return error;
+}
+
+async function readPreparedReview(response, onPrepared) {
+  const reader = response.body.getReader(), decoder = new TextDecoder();
+  let pending = '';
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) throw new Error('评分保存结果未收到，请重试。');
+      pending += decoder.decode(value, { stream: true });
+      let newline;
+      while ((newline = pending.indexOf('\n')) >= 0) {
+        const data = JSON.parse(pending.slice(0, newline));
+        pending = pending.slice(newline + 1);
+        if (data.error) throw requestFailure(data.status, '', data);
+        if (data.result) return data.result;
+        if (data.prepared) onPrepared(data.prepared);
+      }
+    }
+  } finally { await reader.cancel().catch(() => {}); }
+}
+
+export async function request(path, { onPrepared, ...options } = {}) {
   const response = await fetch(path, { ...options, headers: { ...(options.body && typeof options.body === 'string' ? { 'Content-Type': 'application/json' } : {}), ...options.headers } });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(typeof data.error === 'string' ? data.error : data.error?.message || data.message || `${response.status} ${response.statusText}`);
-    error.status = response.status; error.code = data.error?.code;
-    throw error;
+  if (onPrepared && response.ok && response.body && response.headers.get('content-type') === 'application/x-ndjson') {
+    return readPreparedReview(response, onPrepared);
   }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw requestFailure(response.status, response.statusText, data);
   return data;
 }
 

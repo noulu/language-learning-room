@@ -21,13 +21,15 @@ cache.sessions ||= {}; cache.items ||= {}; cache.stages ||= {}; cache.undoItems 
 let uiLanguage = cache.uiLanguage === 'en' ? 'en' : 'zh';
 const t = key => strings[uiLanguage][key] || key;
 let catalog, state, session, revealed = false, busy = false, refreshJob = null, refreshTimer = null;
-let contentResumeLanguage = null;
+let contentResumeLanguage = null, reviewPreview = false;
 let recorder = null, stream = null, recordedURL = null, recordSaving = false, recordOpening = false, audioToken = 0, audioTimer = null, lookupToken = 0;
 let audioFetch = null, lessonObjectURL = null;
 let chosen = null, responseText = '', recordStatus = '', recordServerURL = null, audioHeard = false, lastAudioStatus = '', recognition = cache.recognition === true, listenFirst = cache.listenFirst === true;
 const audio = $('#lesson-audio');
 const exampleAudio=new Audio();let exampleState={key:null,status:'idle'},exampleFetch=null,exampleObjectURL=null;
 const task = () => session?.task;
+const requiresTaskAudio = () => Number(task()?.stage) === 1 || session?.purpose === 'recent-words';
+const canRevealWhileSaving = () => reviewPreview && !requiresTaskAudio();
 const itemKey = () => session && task() ? `${session.sessionId}:${task().id}` : null;
 const selectionKey = () => `${state?.selectedLanguage}:${state?.selectedStage}`;
 const saveCache = () => {
@@ -47,7 +49,7 @@ const adaptiveHelp=()=>uiLanguage==='zh'?'词汇水平来自跨频段的词义�
 
 function saveItem() {
   const key = itemKey();
-  if (!key) return;
+  if (!key || reviewPreview) return;
   cache.items[key] = { ...cache.items[key], revealed, chosen, responseText, recordServerURL, audioHeard };
   const keys = Object.keys(cache.items); // bounded display cache, never the review history
   for (const old of keys.slice(0, Math.max(0, keys.length - 200))) delete cache.items[old];
@@ -66,7 +68,9 @@ function setBusy(value) {
   for(const id of ['assessment-start','assessment-return'])if($('#'+id))$('#'+id).disabled=value||(id==='assessment-start'&&!assessmentCanStart(session?.progress?.vocabulary))||recordSaving||recordOpening||recorder?.state==='recording';
   $('#language').disabled = value;
   document.querySelectorAll('.stage-button, .rating, #reveal, #record, #finish-writing, #practice-retry, #review-word-practice, #recognition-mode, #input-mode').forEach(button => { button.disabled = value || (button.id === 'record' && (recordSaving || recordOpening)) || (button.classList.contains('stage-button') && !(currentLanguage()?.availableStages || [1, 2, 3, 4]).includes(Number(button.dataset.stage))); });
-  if ((Number(task()?.stage) === 1 || session?.purpose === 'recent-words') && !audioHeard) document.querySelectorAll('#reveal, .rating').forEach(button => { button.disabled = true; });
+  if (canRevealWhileSaving() && $('#reveal')) $('#reveal').disabled = false;
+  if ($('#response')) $('#response').disabled = reviewPreview;
+  if (requiresTaskAudio() && !audioHeard) document.querySelectorAll('#reveal, .rating').forEach(button => { button.disabled = true; });
   for (const id of ['recent-toggle','recent-paragraph-toggle','paragraph-generate','review-return']) if ($('#'+id)) $('#'+id).disabled = value || recordSaving || recordOpening || recorder?.state === 'recording';
 }
 
@@ -135,14 +139,16 @@ async function undoRating() {
     const old=cache.undoItems[result.sessionId];
     if (result.restoredFrom && task()) {
       const saved=old?.reviewTaskId===result.restoredFrom.taskId?old.item:{};
-      cache.items[itemKey()]={...saved, responseText:saved.responseText ?? result.restoredFrom.response ?? '',recordServerURL:saved.recordServerURL ?? result.restoredFrom.recordingUrls?.at(-1) ?? null,audioHeard:saved.audioHeard === true && task().audioVerified === true,pending:undefined};
+      const requiresAudio = Number(task().stage) === 1 || session.purpose === 'recent-words';
+      cache.items[itemKey()]={...saved, responseText:saved.responseText ?? result.restoredFrom.response ?? '',recordServerURL:saved.recordServerURL ?? result.restoredFrom.recordingUrls?.at(-1) ?? null,audioHeard:saved.audioHeard === true && (!requiresAudio || task().audioVerified === true),pending:undefined};
     }
-    delete cache.pendingUndos[requestData.sessionId];delete cache.undoItems[requestData.sessionId];loadItem();saveCache();await hydrateTaskPrompt();
+    delete cache.pendingUndos[requestData.sessionId];delete cache.undoItems[requestData.sessionId];loadItem();saveCache();
     say(uiLanguage==='zh'?'已撤销上一评分，恢复上一题。':'Last rating undone. Previous item restored.');
   } catch(error) {
     say(error.message);
     if (error.status===409) { delete cache.pendingUndos[requestData.sessionId];saveCache();const resumed=await request(`/api/session/${encodeURIComponent(requestData.sessionId)}`).catch(()=>null);if(resumed){cleanupMedia();session=resumed;loadItem();saveCache();} }
-  } finally {setBusy(false);renderProgress();renderPractice();}
+  } finally {setBusy(false);renderPractice();renderProgress();}
+  void updateTaskPrompt();
   if(revealed)showAnswer();else showPracticeTop();
   if(task() && !audioHeard)autoPlay();
 }
@@ -304,7 +310,7 @@ function renderPractice() {
   if(revealed&&stage<=2){center+=mnemonicMarkup(item,state.selectedLanguage,uiLanguage);answer=`<div class="word-answer-layout">${answer}<aside id="word-example" class="word-example" aria-label="${esc(uiLanguage==='zh'?'这个词怎么用':'Word usage example')}">${wordExampleMarkup()}</aside></div>`;}
   center=`<section class="practice-question">${center}</section>`;
   renderPracticeMarkup($('#practice'), `<div class="practice-meta"><span>${esc(item.purpose==='recent-paragraphs' ? (uiLanguage==='zh'?(item.sentence?.provenance?.generator==='rules'?'本地规则小段落 · 语音可选':'词汇小段落 · 语音可选'):(item.sentence?.provenance?.generator==='rules'?'Local rule passage · optional audio':'Vocabulary passage · optional audio')) : item.purpose==='recent-words' ? (uiLanguage==='zh'?'近期词 · 已配音短句':'Recent words · voiced sentences') : item.purpose==='assessment' ? (uiLanguage==='zh'?'词汇量校准 · 揭晓前回忆词义':'Vocabulary calibration · recall meaning before reveal') : item.variant?.startsWith('word-meaning-') ? (uiLanguage === 'zh' ? `${item.isReview ? '词义复习' : '词义抽查'} · 在揭晓前回忆意思` : `Word-meaning ${item.isReview ? 'review' : 'check'} · recall before revealing`) : strings[uiLanguage].stages[stage - 1])}</span>${meta}</div><div class="card-center" tabindex="0" role="region" aria-label="${esc(uiLanguage==='zh'?'题目与答案':'Question and answer')}">${center}${answer || '<div class="answer-placeholder" aria-hidden="true"></div>'}</div><div class="actions">${revealed ? `<div class="ratings">${t('ratings').map((label, index) => `<button type="button" class="rating" data-rating="${index + 1}"><kbd>${index + 1}</kbd><span>${esc(label)}</span></button>`).join('')}</div>` : `<button type="button" id="reveal" class="primary">${esc(t('reveal'))} <span aria-hidden="true">␣</span></button>`}</div>`, itemKey(), revealed, `${state.selectedLanguage}:${stage}`);
-  if(revealed&&stage<=2){const key=itemKey();requestAnimationFrame(()=>setTimeout(()=>{if(key===itemKey()&&revealed)void loadWordExample();},0));}
+  if(revealed&&stage<=2&&!reviewPreview){const key=itemKey();requestAnimationFrame(()=>setTimeout(()=>{if(key===itemKey()&&revealed)void loadWordExample();},0));}
   $('#practice .card-center').scrollTop = previousScroll;
   setBusy(busy);
 }
@@ -393,8 +399,8 @@ async function restoreExpiredTask(error, expectedTaskId, expectedAudioToken) {
 }
 
 function reveal() {
-  if ((Number(task()?.stage) === 1 || session?.purpose === 'recent-words') && !audioHeard) return;
-  if (!task() || revealed || busy || recorder?.state === 'recording' || recordSaving || recordOpening) { if (recorder?.state === 'recording' || recordSaving || recordOpening) say(t('busyRecord')); return; }
+  if (requiresTaskAudio() && !audioHeard) return;
+  if (!task() || revealed || (busy && !canRevealWhileSaving()) || recorder?.state === 'recording' || recordSaving || recordOpening) { if (recorder?.state === 'recording' || recordSaving || recordOpening) say(t('busyRecord')); return; }
   revealed = true; saveItem(); renderPractice(); showAnswer();
 }
 
@@ -403,8 +409,13 @@ async function hydrateTaskPrompt() {
   if (!item || Number(item.stage) !== 4 || typeof item.prompt === 'object' || item.promptLanguage) return;
   try {
     const entry = (await request(`/api/lookup?${new URLSearchParams({ languageId: state.selectedLanguage, entryId: item.entryId })}`)).entry;
-    if (task()?.id === item.id && entry?.output?.prompts) item.prompt = entry.output.prompts;
+    if (task() === item && entry?.output?.prompts) { item.prompt = entry.output.prompts; return true; }
   } catch { /* retain the real task prompt; its language is unlabelled if unknown */ }
+}
+
+async function updateTaskPrompt() {
+  const item = task();
+  if (await hydrateTaskPrompt() && task() === item && !busy) renderPractice();
 }
 
 async function rate(rating) {
@@ -415,23 +426,40 @@ async function rate(rating) {
   const saved = cache.items[oldKey];
   const response = Number(task().stage) === 4 ? responseText : chosen === null ? '' : getOptionText(task().options?.[chosen]);
   const pending = saved.pending || { requestId: crypto.randomUUID(), rating, response };
+  $('#practice').querySelector(`[data-rating="${pending.rating}"]`)?.setAttribute('data-submitted', '');
   saved.pending = pending; saveCache();
   let conflictError = null;
   const submittedTaskId = task().id;
+  const previousSession = session;
   try {
-    const result = await request('/api/review', { method: 'POST', body: JSON.stringify({ sessionId: session.sessionId, taskId: task().id, ...pending }) });
+    const result = await request('/api/review', {
+      method: 'POST', headers: { Accept: 'application/x-ndjson' },
+      body: JSON.stringify({ sessionId: previousSession.sessionId, taskId: submittedTaskId, ...pending }),
+      onPrepared(prepared) {
+        reviewPreview = true;
+        cleanupMedia();
+        session = { ...previousSession, ...prepared, generation: null };
+        loadItem(); renderPractice(); showPracticeTop();
+      },
+    });
     const { pending: discardedPending, ...previousItem } = saved;
     cache.undoItems = { [session.sessionId]:{reviewTaskId:submittedTaskId,item:previousItem} };
-    delete cache.items[oldKey]; cleanupMedia();
-    session = { ...session, ...result, generation:result.generation??null }; loadItem(); saveCache(); await hydrateTaskPrompt(); say(result.generation?.message||'');
+    delete cache.items[oldKey];
+    if (reviewPreview) {
+      reviewPreview = false;
+      if (result.task?.id === task()?.id && revealed) saveItem();
+    } else cleanupMedia();
+    session = { ...previousSession, ...result, generation:result.generation??null }; loadItem(); saveCache(); say(result.generation?.message||'');
   } catch (error) {
+    if (reviewPreview) { reviewPreview = false; cleanupMedia(); session = previousSession; loadItem(); }
     if (expiredTaskError(error)) conflictError = error;
     // The server explicitly rejected this old task. Keep its draft under its old
     // ID, but discard its rejected request; ordinary network failures retain it.
     if (conflictError) { delete cache.items[oldKey].pending; saveCache(); }
     say(error.message);
   }
-  finally { setBusy(false); renderProgress(); renderPractice(); }
+  finally { setBusy(false); renderPractice(); renderProgress(); }
+  if (!cache.items[oldKey]?.pending) void updateTaskPrompt();
   if (!cache.items[oldKey]?.pending) showPracticeTop();
   if (conflictError) { await restoreExpiredTask(conflictError, submittedTaskId); return; }
   if (await resumePublishedContent()) return;
@@ -626,7 +654,7 @@ async function lookup(entryId) {
 document.addEventListener('keydown', event => {
   if (event.key === 'Escape' && !$('#dictionary').hidden) { $('#dictionary').hidden = true; lookupToken++; }
   const playButton = $('#play-audio');
-  const action = shortcutAction(event, { revealed, busy, hasTask: Boolean(task()), canUndo:session?.undo?.available===true, canPlay:Boolean(playButton && !playButton.disabled), recording:recorder?.state==='recording'||recordSaving||recordOpening, dialogOpen: Boolean(document.querySelector('dialog[open]')) || !$('#dictionary').hidden });
+  const action = shortcutAction(event, { revealed, busy, canRevealWhileSaving:canRevealWhileSaving(), hasTask: Boolean(task()), canUndo:session?.undo?.available===true, canPlay:Boolean(playButton && !playButton.disabled), recording:recorder?.state==='recording'||recordSaving||recordOpening, dialogOpen: Boolean(document.querySelector('dialog[open]')) || !$('#dictionary').hidden });
   if (!action) return;
   event.preventDefault(); if (action.type === 'undo') void undoRating(); else if (action.type === 'replay') void playAudio(playButton.dataset.kind); else if (action.type === 'reveal') reveal(); else void rate(action.rating);
 });

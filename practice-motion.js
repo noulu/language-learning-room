@@ -61,7 +61,6 @@ export function renderPracticeMarkup(root, markup, key, revealed, scope) {
   const previousKey = root.dataset.motionKey, wasRevealed = root.dataset.motionRevealed === 'true';
   const sameTask = Boolean(key && key === previousKey);
   clearMotion();
-  const outgoing = previousKey && !sameTask && root.dataset.motionScope === scope ? snapshot(root) : sameTask && revealed !== wasRevealed ? snapshot(root.querySelector('.actions')) : null;
   const template = document.createElement('template'); template.innerHTML = markup;
   if (sameTask) {
     const next = root.cloneNode(false); next.append(template.content);
@@ -69,12 +68,8 @@ export function renderPracticeMarkup(root, markup, key, revealed, scope) {
   } else root.replaceChildren(template.content);
   root.dataset.motionKey = key || ''; root.dataset.motionRevealed = String(revealed);
   root.dataset.motionScope = scope;
-  retire(outgoing);
-  if (previousKey && !sameTask) {
-    fade(root.querySelector('.card-center'), .45, 1, 160);
-    fade(root.querySelector('.actions'), .45, 1, 160);
-  } else if (sameTask && revealed && !wasRevealed) {
-    root.querySelectorAll('.answer, .word-example, .word-mnemonic, .mnemonic-pending, .ratings').forEach(node => fade(node, 0, 1, 160));
+  if (sameTask && revealed && !wasRevealed) {
+    root.querySelectorAll('.answer, .word-example, .word-mnemonic, .mnemonic-pending, .ratings').forEach(node => fade(node, .82, 1, 80));
   }
 }
 export function renderExampleMarkup(element, markup) {
