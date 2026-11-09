@@ -24,7 +24,7 @@ function controls(syncConfig) {
   try{const receipt=JSON.parse(localStorage.getItem('multi-offline-last-import'));if(receipt&&Number.isInteger(receipt.reviews)&&Number.isInteger(receipt.recordings))feedback.textContent=`最近一次本机导入：${new Date(receipt.at).toLocaleString()}，${receipt.reviews.toLocaleString()} 条练习记录、${receipt.recordings} 份录音。当前保留的各语言历史见下方“已保存的累计学习记录”；云端是否完成请看上方同步状态。`;}catch{}
   const action=callback=>async event=>{event?.preventDefault();if(busy)return;busy=true;try{await callback(event);}catch(error){feedback.textContent=error.message;}finally{busy=false;}};
   controls.querySelector('#sync-login').onsubmit=action(async()=>{const email=controls.querySelector('#sync-email').value,password=controls.querySelector('#sync-password').value;controls.querySelector('#sync-password').value='';controls.querySelector('#sync-login button').focus();await manager.signIn(email,password);});
-  controls.querySelector('#sync-now').onclick=action(()=>manager.sync());controls.querySelector('#sync-signout').onclick=action(()=>manager.signOut());
+  controls.querySelector('#sync-now').onclick=action(()=>manager.syncNow());controls.querySelector('#sync-signout').onclick=action(()=>manager.signOut());
   controls.querySelector('#export-backup').onclick=action(async()=>{saveFile(await exportBackup(engine),`language-room-backup-${new Date().toISOString().slice(0,10)}.json`);feedback.textContent='已生成九语备份，请保存文件。';});
   controls.querySelector('#import-backup').onclick=()=>controls.querySelector('#backup-file').click();
   controls.querySelector('#backup-file').onchange=action(async event=>{const file=event.target.files[0];event.target.value='';if(!file)return;feedback.textContent='正在校验备份，请稍候…';try{const payload=await readBackup(file,engine),reviews=Object.values(payload.state.languages).reduce((sum,language)=>sum+language.reviews.length,0);if(!confirm(localize(`备份包含 ${reviews.toLocaleString()} 条练习记录、${payload.recordings.length} 份录音。导入会替换本机进度；登录后自动同步，有冲突时需选择版本。继续前会先导出本机旧备份。确定导入？`))){feedback.textContent='已取消导入，现有进度保留。';return;}saveFile(await exportBackup(engine),`language-room-before-import-${Date.now()}.json`);await manager.run(()=>restoreBackup(engine,payload));location.reload();}catch(error){feedback.textContent=`导入未完成：${error.message} 请保留原备份。`;feedback.scrollIntoView({block:'nearest'});}});
@@ -56,7 +56,7 @@ async function launch() {
   shell.hidden=false;panel.remove();controls(syncConfig);
   window.fetch=(input,options={})=>{const url=new URL(typeof input==='string'?input:input.url,location.href);if(url.origin===location.origin&&url.pathname.startsWith('/api/')){
     if(url.pathname==='/api/word-example')return engine.exampleReader.handle(url);
-    const execute=async()=>{const result=await engine.handle(url,{...options,runLocal:callback=>manager.run(callback)});if(result.ok)manager.schedule();return result;};
+    const execute=async()=>{const result=await engine.handle(url,{...options,runLocal:callback=>manager.run(callback)});if(result.ok&&(options.method??'GET')!=='GET')manager.schedule();return result;};
     return url.pathname==='/api/audio'?execute():manager.run(execute);
   }return nativeFetch(input,options);};
   window.addEventListener('storage',event=>{if(event.key==='multi-offline-import-id'){window.multiOffline.restoring=true;location.reload();}});

@@ -11,5 +11,5 @@ self.onmessage=async({data})=>{
   initializing??=(async()=>{const engine={store:new OfflineStore(await openDatabase(),()=>{throw Error('学习数据库尚未就绪。');}),base:new URL('./',import.meta.url)};manager=new SupabaseSync(engine,data.config,{storage,canApply:()=>allowed,onStatus:(text,kind)=>self.postMessage({type:'status',text,kind}),onApply:()=>self.postMessage({type:'apply'})});manager.refreshContext=refreshContext;})();await initializing;
   await refreshContext();
   const result=await manager[data.method](...(data.args??[]));self.postMessage({type:'result',id:data.id,result});
- }catch(error){self.postMessage({type:'result',id:data.id,error:{message:error.message}});}
+ }catch(error){self.postMessage({type:'result',id:data.id,error:{message:error.message,status:error.status,retryUntil:error.retryUntil}});}
 };

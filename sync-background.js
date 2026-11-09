@@ -12,7 +12,7 @@ export function backgroundSync(manager,base){
    if(data.type==='storage'){if(data.value===null)manager.storage.removeItem(data.key);else manager.storage.setItem(data.key,data.value);return;}
    if(data.type==='status'){manager.conflict=data.kind==='conflict'?{background:true}:null;manager.status(data.text,data.kind);return;}
    if(data.type==='apply'){applying=manager.engine.store.refresh().then(()=>manager.onApply());return;}
-   if(data.type==='result'){const request=pending.get(data.id);pending.delete(data.id);if(data.error)request?.reject(new Error(data.error.message));else applying.then(()=>request?.resolve(data.result),error=>request?.reject(error));}
+   if(data.type==='result'){const request=pending.get(data.id);pending.delete(data.id);if(data.error)request?.reject(Object.assign(new Error(data.error.message),data.error));else applying.then(()=>request?.resolve(data.result),error=>request?.reject(error));}
   };
   worker.onerror=()=>{worker.terminate();worker=null;for(const request of pending.values())request.reject(Error('后台同步暂不可用，进度仍保存在当前设备。'));pending.clear();};
  }

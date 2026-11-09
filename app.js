@@ -30,7 +30,12 @@ const exampleAudio=new Audio();let exampleState={key:null,status:'idle'},example
 const task = () => session?.task;
 const itemKey = () => session && task() ? `${session.sessionId}:${task().id}` : null;
 const selectionKey = () => `${state?.selectedLanguage}:${state?.selectedStage}`;
-const saveCache = () => { try { localStorage.setItem('multi-offline-ui', JSON.stringify(cache)); } catch { /* server remains authoritative */ } };
+const saveCache = () => {
+  try {
+    localStorage.setItem('multi-offline-ui', JSON.stringify(cache));
+    window.multiOffline?.sync?.noteUIChange?.();
+  } catch { /* server remains authoritative */ }
+};
 const taskHelper = () => task()?.helperLanguage || state?.preferences?.helpers?.[state?.selectedLanguage] || 'en';
 const taskHelpers = () => task()?.helperLanguages || helperLanguages(state?.preferences, state?.selectedLanguage);
 const isArabic = () => state?.selectedLanguage === 'ar';
@@ -687,6 +692,7 @@ async function initialize() {
     if(priorRecent?.languageId===state.selectedLanguage&&!priorAssessment)await openSession(state.selectedLanguage,3,true,priorRecent.purpose??'recent-words');
     if(cache.pendingUndos[session?.sessionId])await undoRating();
     if (cache.refreshJob?.jobId) { refreshJob = cache.refreshJob; void pollRefresh(); }
+    window.multiOffline?.sync?.resume?.();
   } catch (error) {
     setBusy(false); say(error.message);
     $('#practice').innerHTML = `<div class="empty"><p>${esc(t('noSession'))}</p><button type="button" id="startup-retry">${esc(t('retry'))}</button></div>`;
