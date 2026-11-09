@@ -1,10 +1,12 @@
 // Visual changes never delay learning actions or keep retired controls active.
-let ghost = null;
+const ghosts = new Map();
 const running = new Set();
 const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 function clearMotion() {
   for (const animation of running) animation.cancel();
-  running.clear(); ghost?.remove(); ghost = null;
+  running.clear();
+  for (const ghost of ghosts.values()) ghost.remove();
+  ghosts.clear();
 }
 function fade(element, from, to, duration) {
   if (!element?.animate || reduced()) return;
@@ -32,14 +34,22 @@ function snapshot(element) {
     node.removeAttribute('id'); node.removeAttribute('autofocus');
   }
   copy.querySelectorAll('button,input,textarea,select,a').forEach(node => node.setAttribute('tabindex', '-1'));
-  return copy;
+  return { copy, scrollTop: element.querySelector('.card-center')?.scrollTop ?? 0 };
 }
-function retire(copy) {
-  if (!copy) return;
-  ghost = copy; document.body.append(copy);
-  const animation = fade(copy, 1, 0, 100);
-  if (!animation) { copy.remove(); ghost = null; return; }
-  animation.finished.then(() => { copy.remove(); if (ghost === copy) ghost = null; }, () => copy.remove());
+function retire(snapshot, channel, opacity = 1) {
+  if (!snapshot) return;
+  const { copy, scrollTop } = snapshot;
+  ghosts.set(channel, copy);
+  document.body.append(copy);
+  const scroller = copy.querySelector('.card-center');
+  if (scroller && scrollTop) scroller.scrollTop = scrollTop;
+  const remove = () => {
+    copy.remove();
+    if (ghosts.get(channel) === copy) ghosts.delete(channel);
+  };
+  const animation = fade(copy, opacity, 0, 100);
+  if (animation) animation.finished.then(remove, remove);
+  else remove();
 }
 function patch(current, next) {
   if (current.isEqualNode(next)) return;
@@ -60,7 +70,13 @@ function patch(current, next) {
 export function renderPracticeMarkup(root, markup, key, revealed, scope) {
   const previousKey = root.dataset.motionKey, wasRevealed = root.dataset.motionRevealed === 'true';
   const sameTask = Boolean(key && key === previousKey);
-  clearMotion();
+  const sameScope = root.dataset.motionScope === scope;
+  const changingCard = Boolean(previousKey && !sameTask && sameScope);
+  const changingAnswer = sameTask && revealed !== wasRevealed;
+  // Confirmation of a preview, audio state, and other same-card updates must
+  // not cut off an animation that has already started.
+  if (!sameTask || changingAnswer) clearMotion();
+  const outgoing = changingCard ? snapshot(root) : changingAnswer ? snapshot(root.querySelector('.actions')) : null;
   const template = document.createElement('template'); template.innerHTML = markup;
   if (sameTask) {
     const next = root.cloneNode(false); next.append(template.content);
@@ -68,15 +84,21 @@ export function renderPracticeMarkup(root, markup, key, revealed, scope) {
   } else root.replaceChildren(template.content);
   root.dataset.motionKey = key || ''; root.dataset.motionRevealed = String(revealed);
   root.dataset.motionScope = scope;
-  if (sameTask && revealed && !wasRevealed) {
-    root.querySelectorAll('.answer, .word-example, .word-mnemonic, .mnemonic-pending, .ratings').forEach(node => fade(node, .82, 1, 80));
+  retire(outgoing, 'practice', .5);
+  if (changingCard) {
+    fade(root.querySelector('.card-center'), .7, 1, 160);
+    fade(root.querySelector('.actions'), .7, 1, 160);
+  } else if (changingAnswer && revealed) {
+    root.querySelectorAll('.answer, .word-example, .word-mnemonic, .mnemonic-pending').forEach(node => fade(node, .3, 1, 160));
+    fade(root.querySelector('.ratings'), .7, 1, 160);
   }
 }
 export function renderExampleMarkup(element, markup) {
   if (!element) return;
   // An arriving example must not interrupt the meaning's ongoing fade.
-  if (ghost) { for (const animation of ghost.getAnimations()) animation.cancel(); ghost.remove(); ghost = null; }
+  const ghost = ghosts.get('example');
+  if (ghost) { for (const animation of ghost.getAnimations()) animation.cancel(); ghost.remove(); ghosts.delete('example'); }
   for (const animation of element.getAnimations()) { animation.cancel(); running.delete(animation); }
   const outgoing = snapshot(element);
-  element.innerHTML = markup; retire(outgoing); fade(element, .45, 1, 160);
+  element.innerHTML = markup; retire(outgoing, 'example', .5); fade(element, .45, 1, 160);
 }

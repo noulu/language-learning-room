@@ -315,10 +315,14 @@ function renderPractice() {
   setBusy(busy);
 }
 
-function showPracticeTop() {
-  const top = ($('#recent-controls')&&!$('#recent-controls').hidden?$('#recent-controls'):$('#practice')).getBoundingClientRect().top;
-  // Returning from the controls or a long answer starts the next item at its top.
-  // Leave an already visible card in place during ordinary short-word practice.
+function showPracticeTop(keepVisibleQuestion = false) {
+  const practice = $('#practice');
+  const recent = $('#recent-controls');
+  const top = (recent && !recent.hidden ? recent : practice).getBoundingClientRect().top;
+  if (keepVisibleQuestion) {
+    const questionTop = practice.querySelector('.card-center')?.getBoundingClientRect().top;
+    if (questionTop >= 0 && questionTop < window.innerHeight) return;
+  }
   if (top < 16 || top > window.innerHeight / 4) {
     window.scrollTo({ top: Math.max(0, window.scrollY + top - 16), behavior: 'auto' });
   }
@@ -439,7 +443,7 @@ async function rate(rating) {
         reviewPreview = true;
         cleanupMedia();
         session = { ...previousSession, ...prepared, generation: null };
-        loadItem(); renderPractice(); showPracticeTop();
+        loadItem(); renderPractice(); showPracticeTop(true);
       },
     });
     const { pending: discardedPending, ...previousItem } = saved;
@@ -460,7 +464,7 @@ async function rate(rating) {
   }
   finally { setBusy(false); renderPractice(); renderProgress(); }
   if (!cache.items[oldKey]?.pending) void updateTaskPrompt();
-  if (!cache.items[oldKey]?.pending) showPracticeTop();
+  if (!cache.items[oldKey]?.pending) showPracticeTop(true);
   if (conflictError) { await restoreExpiredTask(conflictError, submittedTaskId); return; }
   if (await resumePublishedContent()) return;
   if (!cache.items[oldKey]?.pending && task()) autoPlay();
