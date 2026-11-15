@@ -4,14 +4,14 @@ export function shortcutAction(event, { revealed, busy, hasTask, dialogOpen, can
   const target = event.target;
   if (event.repeat || event.isComposing || event.altKey || dialogOpen || recording) return null;
   if (target?.closest?.('input, textarea, select, button, a, [contenteditable], [role="textbox"]')) return null;
-  const space = event.code === 'Space' || event.key === ' ';
-  if (busy) return canRevealWhileSaving && hasTask && !revealed && !event.ctrlKey && !event.metaKey && space ? { type: 'reveal' } : null;
+  const revealKey = event.code === 'Space' || event.key === ' ' || event.key === 'Enter';
+  if (busy) return canRevealWhileSaving && hasTask && !revealed && !event.ctrlKey && !event.metaKey && revealKey ? { type: 'reveal' } : null;
   const undoKey = event.key === 'Backspace' && !event.ctrlKey && !event.metaKey && !event.shiftKey;
   const undoZ = !event.ctrlKey && !event.metaKey && !event.shiftKey && (event.code === 'KeyZ' || String(event.key).toLowerCase() === 'z');
   if ((undoKey || undoZ) && canUndo) return { type: 'undo' };
   if (event.ctrlKey || event.metaKey || !hasTask) return null;
   if (!event.shiftKey && canPlay && (event.code === 'KeyS' || String(event.key).toLowerCase() === 's')) return { type: 'replay' };
-  if (space) return revealed ? null : { type: 'reveal' };
+  if (revealKey) return revealed ? null : { type: 'reveal' };
   if (revealed && /^[1-4]$/.test(event.key)) return { type: 'rate', rating: Number(event.key) };
   return null;
 }
