@@ -44,7 +44,7 @@ const isArabic = () => state?.selectedLanguage === 'ar';
 const say = (message = '') => { $('#notice').textContent = message; $('#notice').hidden = !message; };
 const updatedItemMessage = () => uiLanguage === 'zh' ? '内容或题目已更新，已恢复当前练习，请重新作答。' : 'The content or current item has changed. Resumed the current exercise; answer it again.';
 const expiredTaskError = error => error.status === 409 && ['content_changed', 'task_conflict', 'session_conflict'].includes(error.code);
-const adaptiveHelp=()=>uiLanguage==='zh'?'词汇水平来自跨频段的词义自评抽测，各段按有源词形总量加权，不按最高词频排名或难度分数换算。重来计0，困难计部分认识0.5，正常与轻松都计1；Easy不会额外加词。首次揭晓前答案冻结，学会并复习同词不刷测量进度。六题一组可随时返回原练习，词汇练习先学当天的新词，再复习到期词。每日新词默认20，可在设置中按语言调整。普通词汇练习在新词目标完成后可穿插一次校准。输入训练也会穿插词义抽测。范围仅是宽泛参考，自评、词义及来源筛选都有误差；词族、低频尾部和听说能力未测，七语不直接比较。测量包缺失时只显示当前课程范围，保留原学习方式。':'Vocabulary level uses stratified word-meaning self-ratings weighted by sourced word-form populations, never maximum rank or difficulty. Again=0, Hard=.5, Good/Easy=1; Easy adds no extra words. First pre-reveal answers freeze; learning and repeating a measured word do not inflate progress. Six-word groups preserve your original place. Vocabulary practice shows today’s new words first, then due reviews. Set the daily new-word limit for each language in Settings. The default is 20. After reaching the daily new-word goal, vocabulary practice can include one calibration question. Input practice also includes vocabulary probes. Broad ranges are not validated confidence; self-ratings, senses and source qualification may be biased. Word families, low-frequency tail and productive skills are unmeasured; languages are not directly comparable. Missing assessment packs retain course-only estimates.';
+const adaptiveHelp=()=>uiLanguage==='zh'?'词汇水平来自跨频段的词义自评抽测，各段按有源词形总量加权，不按最高词频排名或难度分数换算。重来计0，困难计部分认识0.5，正常与轻松都计1；Easy不会额外加词。首次揭晓前答案冻结，学会并复习同词不刷测量进度。六题一组可随时返回原练习，首次练习选重来或困难时计入今日新学，选正常或轻松时记为已会。每日新词目标默认20，可按语言调整。达到目标后优先复习，到期词练完会继续出词。做过足够的首次练习后，当天可穿插一道校准。输入训练也会穿插词义抽测。范围仅是宽泛参考，自评、词义及来源筛选都有误差；词族、低频尾部和听说能力未测，七语不直接比较。测量包缺失时只显示当前课程范围，保留原学习方式。':'Vocabulary level uses stratified word-meaning self-ratings weighted by sourced word-form populations, never maximum rank or difficulty. Again=0, Hard=.5, Good/Easy=1; Easy adds no extra words. First pre-reveal answers freeze; learning and repeating a measured word do not inflate progress. Six-word groups preserve your original place. On first practice, Again and Hard count as new words studied. Good and Easy count as already known. The daily goal defaults to 20 and can be adjusted per language. After the goal, due reviews take priority, and fresh words continue when none are due. Vocabulary practice can include one calibration question after enough first checks. Input practice also includes vocabulary probes. Broad ranges are not validated confidence; self-ratings, senses and source qualification may be biased. Word families, low-frequency tail and productive skills are unmeasured; languages are not directly comparable. Missing assessment packs retain course-only estimates.';
 
 
 function saveItem() {
@@ -107,9 +107,15 @@ function renderProgress() {
   const newVocabulary = session?.progress?.newVocabulary ?? state?.languages?.[state?.selectedLanguage]?.newVocabulary;
   const showNewVocabulary = Boolean(newVocabulary && state?.selectedStage === 2);
   $('#new-vocabulary-label').hidden = $('#new-vocabulary-count').hidden = !showNewVocabulary;
+  const showKnownVocabulary = showNewVocabulary && newVocabulary.known > 0;
+  $('#known-vocabulary-label').hidden = $('#known-vocabulary-count').hidden = !showKnownVocabulary;
   if (showNewVocabulary) {
-    $('#new-vocabulary-label').textContent = uiLanguage === 'zh' ? '今日新词' : 'New words today';
+    $('#new-vocabulary-label').textContent = uiLanguage === 'zh' ? '今日新学' : 'New words studied';
     $('#new-vocabulary-count').textContent = `${newVocabulary.completed} / ${newVocabulary.goal}`;
+  }
+  if (showKnownVocabulary) {
+    $('#known-vocabulary-label').textContent = uiLanguage === 'zh' ? '今日首次确认已会' : 'Already knew at first check';
+    $('#known-vocabulary-count').textContent = String(newVocabulary.known);
   }
   const history = historyCounts(), count = history[state?.selectedLanguage] || 0;
   $('#history-summary').textContent = uiLanguage === 'zh'
@@ -299,13 +305,23 @@ function renderPractice() {
   if (!item && session?.purpose==='assessment') {$('#practice').innerHTML=`<div class="empty"><p>${esc(uiLanguage==='zh'?'这组抽测已完成。可继续校准，或返回原练习。':'This group is complete. Continue calibration or return to practice.')}</p></div>`;setBusy(busy);return;}
   if (!item) {
     let message = t('itemEmpty');
+    let action = t('retry');
+    let nextReview = '';
     const newVocabulary = session?.progress?.newVocabulary;
     if (state?.selectedStage === 2 && !session?.purpose && newVocabulary) {
       if (newVocabulary.goal === 0) message = uiLanguage === 'zh' ? '今日只复习，暂无到期词。' : 'Review only today. No words are due.';
-      else if (newVocabulary.completed >= newVocabulary.goal) message = uiLanguage === 'zh' ? '今天的新词已学完，暂无到期词。' : 'Today’s new words are complete. No words are due.';
-      else message = uiLanguage === 'zh' ? '当前教材暂无可学的新词或到期词。' : 'This course has no new or due words available.';
+      else message = uiLanguage === 'zh' ? '当前教材的新词已经练过，暂无到期词。' : 'You’ve practiced all the new words in this course. No words are due.';
+      const due = Date.parse(session.progress.nextDue);
+      action = '';
+      if (Number.isFinite(due)) {
+        const time = new Intl.DateTimeFormat(uiLanguage === 'zh' ? 'zh-CN' : 'en', {
+          dateStyle: 'medium', timeStyle: 'short', timeZone: state.preferences.timezone ?? 'America/New_York'
+        }).format(due);
+        nextReview = uiLanguage === 'zh' ? `下次复习 ${time}` : `Next review ${time}`;
+        action = uiLanguage === 'zh' ? '查看到期词' : 'Check for due words';
+      }
     }
-    $('#practice').innerHTML = `<div class="empty"><p>${esc(message)}</p><button type="button" id="practice-retry">${esc(t('retry'))}</button></div>`;
+    $('#practice').innerHTML = `<div class="empty"><p>${esc(message)}</p>${nextReview ? `<p>${esc(nextReview)}</p>` : ''}${action ? `<button type="button" id="practice-retry">${esc(action)}</button>` : ''}</div>`;
     setBusy(busy); return;
   }
   const stage = Number(item.practiceStage || item.stage || state.selectedStage);
@@ -334,9 +350,9 @@ function renderPractice() {
   if(revealed&&stage<=2){center+=mnemonicMarkup(item,state.selectedLanguage,uiLanguage);answer=`<div class="word-answer-layout">${answer}<aside id="word-example" class="word-example" aria-label="${esc(uiLanguage==='zh'?'这个词怎么用':'Word usage example')}">${wordExampleMarkup()}</aside></div>`;}
   center=`<section class="practice-question">${center}</section>`;
   const dailyWords = session?.progress?.newVocabulary;
-  const wordType = uiLanguage === 'zh' ? (item.isReview ? '到期复习' : '新词') : (item.isReview ? 'Due review' : 'New word');
+  const wordType = uiLanguage === 'zh' ? (item.isReview ? '到期复习' : '首次练习') : (item.isReview ? 'Due review' : 'First practice');
   const vocabularyLabel = dailyWords
-    ? `${wordType} · ${uiLanguage === 'zh' ? '今日新词' : 'New today'} ${dailyWords.completed}/${dailyWords.goal}`
+    ? `${wordType} · ${uiLanguage === 'zh' ? '今日新学' : 'New words studied'} ${dailyWords.completed}/${dailyWords.goal}`
     : wordType;
   renderPracticeMarkup($('#practice'), `<div class="practice-meta"><span>${esc(item.purpose==='recent-paragraphs' ? (uiLanguage==='zh'?(item.sentence?.provenance?.generator==='rules'?'本地规则小段落 · 语音可选':'词汇小段落 · 语音可选'):(item.sentence?.provenance?.generator==='rules'?'Local rule passage · optional audio':'Vocabulary passage · optional audio')) : item.purpose==='recent-words' ? (uiLanguage==='zh'?'近期词 · 已配音短句':'Recent words · voiced sentences') : (item.purpose==='assessment' || item.selectionReason==='vocabulary-assessment') ? (uiLanguage==='zh'?'词汇量校准 · 揭晓前回忆词义':'Vocabulary calibration · recall meaning before reveal') : item.stage === 2 ? vocabularyLabel : item.variant?.startsWith('word-meaning-') ? (uiLanguage === 'zh' ? `${item.isReview ? '词义复习' : '词义抽查'} · 在揭晓前回忆意思` : `Word-meaning ${item.isReview ? 'review' : 'check'} · recall before revealing`) : strings[uiLanguage].stages[stage - 1])}</span>${meta}</div><div class="card-center" tabindex="0" role="region" aria-label="${esc(uiLanguage==='zh'?'题目与答案':'Question and answer')}">${center}${answer || '<div class="answer-placeholder" aria-hidden="true"></div>'}</div><div class="actions">${revealed ? `<div class="ratings">${t('ratings').map((label, index) => `<button type="button" class="rating" data-rating="${index + 1}"><kbd>${index + 1}</kbd><span>${esc(label)}</span></button>`).join('')}</div>` : `<button type="button" id="reveal" class="primary" aria-keyshortcuts="Space Enter">${esc(t('reveal'))} <span aria-hidden="true">␣ / ↵</span></button>`}</div>`, itemKey(), revealed, `${state.selectedLanguage}:${stage}`);
   if(revealed&&stage<=2&&!reviewPreview){const key=itemKey();requestAnimationFrame(()=>setTimeout(()=>{if(key===itemKey()&&revealed)void loadWordExample();},0));}
@@ -602,7 +618,7 @@ function renderSettings() {
   $('#daily-goal').closest('.setting-row').insertAdjacentHTML('beforebegin', `
     <div class="setting-row"><label for="new-vocabulary-goal">${uiLanguage === 'zh' ? '每日新词' : 'New words per day'} · ${esc(languageNames[state.selectedLanguage])}</label>
     <input id="new-vocabulary-goal" type="number" min="0" max="1000" value="${newVocabularyGoal}" aria-describedby="new-vocabulary-note" required></div>
-    <p id="new-vocabulary-note" class="panel-note">${uiLanguage === 'zh' ? '词汇练习先学新词，再做已到期的复习。填 0 只复习。' : 'Vocabulary practice shows new words first, then due reviews. Set 0 for review only.'}</p>`);
+    <p id="new-vocabulary-note" class="panel-note">${uiLanguage === 'zh' ? '首次练习选「重来」或「困难」计入新学，选「正常」或「轻松」记为已会。完成目标后继续复习，没到期词时接着练可用的新词。填 0 只复习。' : 'On first practice, Again or Hard counts toward new words studied. Good or Easy records a word you already know. After the goal, review due words or continue with fresh words when none are due. Set 0 for review only.'}</p>`);
   $('#daily-goal').closest('.setting-row').insertAdjacentHTML('afterend',`<div class="setting-row"><label for="learning-timezone">${uiLanguage==='zh'?'学习日时区':'Study-day time zone'}</label><select id="learning-timezone">${[...new Set([timezone,'America/New_York',deviceZone,'Asia/Shanghai','Asia/Tokyo','Europe/London','UTC'])].filter(Boolean).map(zone=>`<option value="${esc(zone)}" ${zone===timezone?'selected':''}>${esc(zone)}${zone===deviceZone?(uiLanguage==='zh'?' · 当前设备':' · this device'):''}</option>`).join('')}</select></div><p class="panel-note">${uiLanguage==='zh'?'今日任务按这个时区计日，并随账号同步；换设备保持一致。旧记录日期保留。':'Today uses this time zone on every synced device. Existing record dates are preserved.'}</p>`);
   if(window.multiOffline){$('#content-limit').hidden=true;$('label[for="content-limit"]').hidden=true;$('#refresh-content').textContent=uiLanguage==='zh'?'检查内容与网站更新':'Check content and website updates';$('.refresh-controls + .panel-note').textContent=uiLanguage==='zh'?'教材随网站发布更新。点击检查最新内容；离线资源、学习进度和私人录音分别保存，更新不清除进度。':'Lessons update with website releases. Check for new content here. Updates preserve your progress, drafts and private recordings.';}
 }
