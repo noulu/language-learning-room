@@ -44,7 +44,7 @@ const isArabic = () => state?.selectedLanguage === 'ar';
 const say = (message = '') => { $('#notice').textContent = message; $('#notice').hidden = !message; };
 const updatedItemMessage = () => uiLanguage === 'zh' ? '内容或题目已更新，已恢复当前练习，请重新作答。' : 'The content or current item has changed. Resumed the current exercise; answer it again.';
 const expiredTaskError = error => error.status === 409 && ['content_changed', 'task_conflict', 'session_conflict'].includes(error.code);
-const adaptiveHelp=()=>uiLanguage==='zh'?'词汇水平来自跨频段的词义自评抽测，各段按有源词形总量加权，不按最高词频排名或难度分数换算。重来计0，困难计部分认识0.5，正常与轻松都计1；Easy不会额外加词。首次揭晓前答案冻结，学会并复习同词不刷测量进度。六题一组可随时返回原练习，首次练习选重来或困难时计入今日新学，选正常或轻松时记为已会。每日新词目标默认20，可按语言调整。达到目标后优先复习，到期词练完会继续出词。做过足够的首次练习后，当天可穿插一道校准。输入训练也会穿插词义抽测。范围仅是宽泛参考，自评、词义及来源筛选都有误差；词族、低频尾部和听说能力未测，七语不直接比较。测量包缺失时只显示当前课程范围，保留原学习方式。':'Vocabulary level uses stratified word-meaning self-ratings weighted by sourced word-form populations, never maximum rank or difficulty. Again=0, Hard=.5, Good/Easy=1; Easy adds no extra words. First pre-reveal answers freeze; learning and repeating a measured word do not inflate progress. Six-word groups preserve your original place. On first practice, Again and Hard count as new words studied. Good and Easy count as already known. The daily goal defaults to 20 and can be adjusted per language. After the goal, due reviews take priority, and fresh words continue when none are due. Vocabulary practice can include one calibration question after enough first checks. Input practice also includes vocabulary probes. Broad ranges are not validated confidence; self-ratings, senses and source qualification may be biased. Word families, low-frequency tail and productive skills are unmeasured; languages are not directly comparable. Missing assessment packs retain course-only estimates.';
+const adaptiveHelp=()=>uiLanguage==='zh'?'词汇水平来自跨频段的词义自评抽测，各段按有源词形总量加权，不按最高词频排名或难度分数换算。重来计0，困难计部分认识0.5，正常与轻松都计1；Easy不会额外加词。首次揭晓前答案冻结，学会并复习同词不刷测量进度。六题一组可随时返回原练习，首次练习选重来或困难时计入今日新学，选正常或轻松时记为已会。每日新词目标默认20，可按语言调整。达到目标后自动交替出新词和到期复习。词汇练习中，同一个词至少间隔一小时才会再出。做过足够的首次练习后，当天可穿插一道校准。输入训练也会穿插词义抽测。范围仅是宽泛参考，自评、词义及来源筛选都有误差；词族、低频尾部和听说能力未测，七语不直接比较。测量包缺失时只显示当前课程范围，保留原学习方式。':'Vocabulary level uses stratified word-meaning self-ratings weighted by sourced word-form populations, never maximum rank or difficulty. Again=0, Hard=.5, Good/Easy=1; Easy adds no extra words. First pre-reveal answers freeze; learning and repeating a measured word do not inflate progress. Six-word groups preserve your original place. On first practice, Again and Hard count as new words studied. Good and Easy count as already known. The daily goal defaults to 20 and can be adjusted per language. After the goal, new words alternate with due reviews. In vocabulary practice, a word waits at least an hour before appearing again. Vocabulary practice can include one calibration question after enough first checks. Input practice also includes vocabulary probes. Broad ranges are not validated confidence; self-ratings, senses and source qualification may be biased. Word families, low-frequency tail and productive skills are unmeasured; languages are not directly comparable. Missing assessment packs retain course-only estimates.';
 
 
 function saveItem() {
@@ -138,13 +138,6 @@ function renderUndo() {
   const button=$('#undo-button');
   button.textContent=uiLanguage==='zh'?'撤销上一评分':'Undo last rating';
   button.disabled=busy || recorder?.state==='recording' || recordSaving || recordOpening || !session?.undo?.available || Boolean(document.querySelector('dialog[open]')) || !$('#dictionary').hidden;
-  const more = $('#vocabulary-more');
-  const count = (session?.progress?.newVocabularyNextGoal ?? 0) - (session?.progress?.newVocabulary?.completed ?? 0);
-  if (more) {
-    more.hidden = count <= 0;
-    more.disabled = busy;
-    if (count > 0) more.textContent = uiLanguage === 'zh' ? `今天再学 ${count} 个新词` : `Learn ${count} more new words today`;
-  }
 }
 async function undoRating() {
   if (busy || recorder?.state==='recording' || recordSaving || recordOpening || document.querySelector('dialog[open]') || !$('#dictionary').hidden) return;
@@ -389,7 +382,7 @@ function cleanupMedia() {
   recordedURL = null; recordServerURL = null; recordStatus = '';
 }
 
-async function openSession(languageId = state.selectedLanguage, stage = state.selectedStage, patch = false, purpose, newVocabularyToday) {
+async function openSession(languageId = state.selectedLanguage, stage = state.selectedStage, patch = false, purpose) {
   if (busy || recorder?.state === 'recording' || recordSaving || recordOpening) { if (recorder?.state === 'recording' || recordSaving || recordOpening) say(t('busyRecord')); $('#language').value = state.selectedLanguage; return; }
   saveItem(); setBusy(true); say(); cleanupMedia();
   $('#dictionary').hidden = true; lookupToken++;
@@ -398,7 +391,7 @@ async function openSession(languageId = state.selectedLanguage, stage = state.se
     if (patch) state = await request('/api/state', { method: 'PATCH', body: JSON.stringify({ selectedLanguage: languageId, selectedStage: stage }) });
     const key = `${languageId}:${stage}`;
     // POST resumes the active server task. Cached IDs may refer to an inactive mode.
-    session = await request('/api/session', { method: 'POST', body: JSON.stringify({ languageId, stage, ...(purpose ? {purpose} : {}), ...(stage === 1 ? { mode: recognition ? 'recognition' : 'mental-spelling' } : {}), newVocabularyToday }) });
+    session = await request('/api/session', { method: 'POST', body: JSON.stringify({ languageId, stage, ...(purpose ? {purpose} : {}), ...(stage === 1 ? { mode: recognition ? 'recognition' : 'mental-spelling' } : {}) }) });
     if (!session?.sessionId) throw new Error(t('noSession'));
     say(session.generation?.message||'');
     delete cache.activeAssessment;if(purpose)cache.activeRecent={languageId,sessionId:session.sessionId,purpose};else delete cache.activeRecent;cache.sessions[key] = session.sessionId; cache.stages[languageId] = stage; saveCache(); loadItem(); await hydrateTaskPrompt();
@@ -745,11 +738,6 @@ document.addEventListener('click', event => {
   else if (button.id === 'dictionary-close') { $('#dictionary').hidden = true; lookupToken++; }
   else if (button.id === 'refresh-content') void refreshContent();
   else if (button.id === 'practice-retry') void openSession(state.selectedLanguage,state.selectedStage,false,['recent-words','recent-paragraphs'].includes(session?.purpose)?session.purpose:undefined);
-  else if (button.id === 'vocabulary-more') {
-    const { daily, newVocabularyNextGoal } = session.progress;
-    void openSession(state.selectedLanguage, 2, false, undefined, { date: daily.date, goal: newVocabularyNextGoal });
-    button.blur();
-  }
   else if (button.id === 'undo-button') { void undoRating(); button.blur(); }
 });
 document.addEventListener('input', event => { if (event.target.id === 'response') { responseText = event.target.value; saveItem(); } });
