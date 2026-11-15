@@ -8,6 +8,11 @@ export function validateState(state) {
   for(const key of ['languages','sessions','activeSessions','requests','receipts','recordings','jobs','preferences'])check(object(state[key]),'存档缺少必要字段。');
   check(Object.keys(state.languages).length===LANGUAGE_IDS.length&&Object.keys(state.languages).every(id=>LANGUAGE_IDS.includes(id)),'存档必须包含九门语言。');
   check(Number.isInteger(state.preferences.dailyGoal)&&state.preferences.dailyGoal>=1&&state.preferences.dailyGoal<=1000,'每日目标无效。');
+  const limits = state.preferences.newVocabularyGoals;
+  if (limits !== undefined) {
+    check(object(limits) && Object.entries(limits).every(([id, limit]) =>
+      LANGUAGE_IDS.includes(id) && Number.isInteger(limit) && limit >= 0 && limit <= 1000), '每日新词设置无效。');
+  }
   for(const id of LANGUAGE_IDS) {
     const language=state.languages[id];check(Array.isArray(language.reviews)&&object(language.cards)&&object(language.rewards)&&object(language.stagePositions)&&Number.isFinite(language.xp),'学习记录无效。');
     for(const review of language.reviews)check([1,2,3,4].includes(review.rating)&&Number.isFinite(Date.parse(review.reviewedAt))&&review.entryId?.startsWith(`${id}:`)&&uuid.test(review.taskId),'评分记录无效。');
