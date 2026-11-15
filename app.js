@@ -622,10 +622,9 @@ async function saveSettings(event) {
     // Fetch the updated current task so its prompt also uses the selected helper.
     // This retains task ID, local draft, reveal state and review history.
     if (session?.sessionId) {
-      let resumed = await request(`/api/session/${encodeURIComponent(session.sessionId)}`);
-      if (newVocabularyChanged && state.selectedStage === 2 && !session.purpose && !resumed.task) {
-        resumed = await request('/api/session', { method: 'POST', body: JSON.stringify({ languageId: state.selectedLanguage, stage: 2 }) });
-      }
+      const resumed = newVocabularyChanged && state.selectedStage === 2 && !session.purpose
+        ? await request('/api/session', { method: 'POST', body: JSON.stringify({ languageId: state.selectedLanguage, stage: 2 }) })
+        : await request(`/api/session/${encodeURIComponent(session.sessionId)}`);
       if (resumed.task?.id !== previousTaskId && (recorder?.state === 'recording' || recordSaving || recordOpening)) contentResumeLanguage = state.selectedLanguage;
       else {
         session = resumed;
