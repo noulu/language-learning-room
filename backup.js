@@ -13,6 +13,11 @@ export function validateState(state) {
     check(object(limits) && Object.entries(limits).every(([id, limit]) =>
       LANGUAGE_IDS.includes(id) && Number.isInteger(limit) && limit >= 0 && limit <= 1000), '每日新词设置无效。');
   }
+  const today = state.preferences.newVocabularyToday;
+  if (today !== undefined) {
+    check(object(today) && Object.entries(today).every(([id, row]) => LANGUAGE_IDS.includes(id) && object(row) &&
+      /^\d{4}-\d{2}-\d{2}$/.test(row.date) && Number.isInteger(row.goal) && row.goal > 0 && row.goal <= 1000), '今日加学设置无效。');
+  }
   for(const id of LANGUAGE_IDS) {
     const language=state.languages[id];check(Array.isArray(language.reviews)&&object(language.cards)&&object(language.rewards)&&object(language.stagePositions)&&Number.isFinite(language.xp),'学习记录无效。');
     for(const review of language.reviews)check([1,2,3,4].includes(review.rating)&&Number.isFinite(Date.parse(review.reviewedAt))&&review.entryId?.startsWith(`${id}:`)&&uuid.test(review.taskId),'评分记录无效。');
