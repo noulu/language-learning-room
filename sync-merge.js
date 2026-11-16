@@ -1,6 +1,6 @@
 // Three-way merge: independent languages merge; conflicting learning branches
 // remain intact and require a choice. Never silently overwrite either history.
-const same=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+import { sameJSON as same } from './sync-delta.js';
 const clone=value=>value===undefined?undefined:structuredClone(value);
 const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
 export class SyncConflict extends Error { constructor(paths){super('两台设备修改了同一份学习记录，两份进度均已保留。');this.name='SyncConflict';this.paths=paths;} }

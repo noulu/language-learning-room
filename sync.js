@@ -1,11 +1,12 @@
 import { sha256 } from './crypto.js';
 import { validateState, normalize } from './backup.js';
 import { mergeProgress, SyncConflict } from './sync-merge.js';
+import { applyDelta, makeDelta, sameJSON as equal } from './sync-delta.js';
 const AUTH_KEY='multi-offline-auth';
 const QUIET_MS = 12_000;
 const BATCH_MS = 45_000;
 const CHECK_MS = 120_000;
-const equal=(left,right)=>JSON.stringify(left)===JSON.stringify(right);
+const MAX_DELTA_BYTES = 512 * 1024;
 const parse=value=>{try{return JSON.parse(value);}catch{return null;}};
 
 function portableUI(value) {
@@ -44,17 +45,32 @@ export class SupabaseSync {
   async remote(baseline, userId) {
     const headers = { 'Content-Type': 'application/json' };
     const head = await this.request('/rest/v1/rpc/travel_head', { headers, body: {} });
+    const protocol = { revision:head.revision, incremental:head.delta === 1, checkpoint:head.checkpoint === true };
     if (baseline && head.revision === baseline.revision) {
-      return { revision: head.revision, payload: baseline.payload };
+      return { ...protocol, payload: baseline.payload };
     }
-    if (head.revision === 0) return { revision: 0, payload: null };
+    if (head.revision === 0) return { ...protocol, payload: null };
 
     // A conflict or interrupted apply can leave the merge baseline behind.
     // Reuse the validated cloud response independently of that baseline.
     const cacheKey = userId && `sync-fetched:${userId}`;
     const cached = cacheKey ? await this.meta(cacheKey) : null;
     if (cached && cached.revision === head.revision) {
-      return { revision: cached.revision, payload: portablePayload(await unpack(cached.payload)) };
+      return { ...protocol, payload: portablePayload(await unpack(cached.payload)) };
+    }
+    const known = cached && cached.revision > (baseline?.revision ?? 0) ? cached : baseline;
+    if (protocol.incremental && known?.revision > 0 && known.revision < head.revision) {
+      const response = await this.request('/rest/v1/rpc/travel_delta_read', {
+        headers, body: { after_revision:known.revision, through_revision:head.revision },
+      });
+      if (response.revision === head.revision && Array.isArray(response.changes) &&
+          response.changes.length === head.revision - known.revision) {
+        let payload = portablePayload(await unpack(known.payload));
+        for (const change of response.changes) payload = applyDelta(payload, change);
+        this.validate(payload);
+        if (this.auth?.user?.id === userId) await this.meta(cacheKey, { revision:head.revision, payload });
+        return { ...protocol, payload };
+      }
     }
 
     const response = await this.request('/rest/v1/rpc/travel_read', { headers, body: {} });
@@ -63,9 +79,57 @@ export class SupabaseSync {
     if (cacheKey && this.auth?.user?.id === userId) {
       await this.meta(cacheKey, { revision: response.revision, payload: response.payload });
     }
-    return { revision: response.revision, payload: portablePayload(payload) };
+    return { ...protocol, checkpoint:protocol.checkpoint && response.revision === head.revision,
+      revision: response.revision, payload: portablePayload(payload) };
   }
-  async writeRemote(revision,payload){return this.request('/rest/v1/rpc/travel_write',{headers:{'Content-Type':'application/json'},body:{expected_revision:revision,new_payload:await pack(payload)}});}
+  async writeRemote(remote, payload, local) {
+    const headers = { 'Content-Type':'application/json' };
+    const writeFull = async () => this.request('/rest/v1/rpc/travel_write', {
+      headers, body:{ expected_revision:remote.revision, new_payload:await pack(payload) },
+    });
+    if (!remote.incremental) return writeFull();
+    const change = remote.checkpoint ? makeDelta(remote.payload, payload) : null;
+    const useDelta = change && new Blob([JSON.stringify(change)]).size <= MAX_DELTA_BYTES;
+    const pending = {
+      parent:remote.revision,
+      commit:crypto.randomUUID(),
+      ...(useDelta ? {change} : {payload}),
+      ...(equal(local,payload) ? {} : {localBase:local}),
+    };
+    const pendingKey = `sync-pending:${this.auth.user.id}`;
+    await this.meta(pendingKey, pending);
+    try {
+      return await this.request('/rest/v1/rpc/travel_delta_write', {
+        headers,
+        body:{expected_revision:pending.parent,commit_id:pending.commit,change:useDelta?change:null,checkpoint:useDelta?null:payload},
+      });
+    } catch (error) {
+      if (error.status !== 413) throw error;
+      await this.meta(pendingKey, null);
+      return writeFull();
+    }
+  }
+  async recoverPending(baseline, uid) {
+    const key = `sync-pending:${uid}`;
+    const pending = await this.meta(key);
+    if (!pending) return baseline;
+    if (baseline && baseline.revision > pending.parent) {
+      await this.meta(key, null);
+      return baseline;
+    }
+    const received = await this.request('/rest/v1/rpc/travel_delta_receipt', {
+      headers:{'Content-Type':'application/json'}, body:{at_revision:pending.parent+1,commit_id:pending.commit},
+    });
+    if (!received.accepted) return baseline;
+    const basis = baseline?.revision === pending.parent ? baseline : await this.meta(`sync-fetched:${uid}`);
+    if (!pending.payload && basis?.revision !== pending.parent) return baseline;
+    const payload = pending.payload ?? applyDelta(portablePayload(await unpack(basis.payload)), pending.change);
+    this.validate(payload);
+    const recovered = { revision:pending.parent+1, payload, ...(pending.localBase ? {localBase:pending.localBase} : {}) };
+    await this.meta(`sync-base:${uid}`, recovered);
+    await this.meta(key, null);
+    return recovered;
+  }
   async meta(key,value) {
     const db=this.engine.store.db,write=value!==undefined,tx=db.transaction('state',write?'readwrite':'readonly'),table=tx.objectStore('state');let result;
     const request=write?table.put(value,key):table.get(key);request.onsuccess=()=>{result=request.result;};
@@ -148,7 +212,7 @@ export class SupabaseSync {
     if(!this.canApply()){this.status('本机已保存 · 当前操作结束后同步','pending');return;}
     this.auth=parse(this.storage.getItem(AUTH_KEY))||this.auth;
     const uid=this.auth.user.id,owner=await this.meta('sync-owner');if(owner&&owner!==uid)throw new Error('同步账号与本机进度所属账号不一致。');
-    const baseline=await this.meta(`sync-base:${uid}`);
+    const baseline=await this.recoverPending(await this.meta(`sync-base:${uid}`),uid);
     if (baseline) {
       baseline.payload = portablePayload(baseline.payload);
       baseline.localBase = portablePayload(baseline.localBase);
@@ -172,7 +236,7 @@ export class SupabaseSync {
         if(recordings){const tx=this.engine.store.db.transaction('recordings','readwrite');for(const row of recordings)tx.objectStore('recordings').put(row.blob,row.id);await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);});}
         await this.uploadRecordings(merged,remote.payload);
         if(!await this.matches(local)){this.status('本机已保存 · 继续同步最新进度','pending');return;}
-        const response=await this.writeRemote(remote.revision,merged);
+        const response=await this.writeRemote(remote,merged,local);
         if(response.conflict)continue;revision=response.revision;
       }
       const changed=!equal(local,merged);
@@ -187,6 +251,9 @@ export class SupabaseSync {
         if(changed)await this.apply(merged,recordings);
         await this.meta(`sync-base:${uid}`,{revision,payload:merged});await this.meta('sync-owner',uid);return true;
       });
+      if (remote.incremental && revision > remote.revision && this.auth?.user?.id === uid) {
+        await this.meta(`sync-pending:${uid}`, null);
+      }
       if(!applied)return;
       this.conflict=null;this.status(`已同步 · ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`,'synced');
       if(changed)this.onApply();return;
@@ -302,7 +369,7 @@ export class SupabaseSync {
     if(!this.conflict)throw new Error('冲突已处理。');const fresh=await this.remote(this.conflict.remote,this.auth.user.id);if(fresh.revision!==this.conflict.remote.revision){this.conflict=null;return this.syncLocked();}
     const local=await this.snapshot();if(!equal(local,this.conflict.local)){this.conflict=null;return this.syncLocked();}
     const payload=which==='local'?local:this.conflict.remote.payload,recordings=await this.downloadRecordings(payload);let revision=fresh.revision;
-    if(which==='local'){await this.uploadRecordings(payload,fresh.payload);const result=await this.writeRemote(revision,payload);if(result.conflict){this.conflict=null;return this.syncLocked();}revision=result.revision;}
+    if(which==='local'){await this.uploadRecordings(payload,fresh.payload);const result=await this.writeRemote(fresh,payload,local);if(result.conflict){this.conflict=null;return this.syncLocked();}revision=result.revision;}
     const applied=await this.run(async()=>{
       if(!await this.matches(local)||!this.canApply()){this.status('本机有新操作，请重新选择同步版本。','conflict');return false;}
       if(which!=='local')await this.apply(payload,recordings);
