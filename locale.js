@@ -2,6 +2,7 @@
 // Keep their original text so switching UI language also updates existing status.
 const labels=new Map([
  ['本机已保存 · 等待同步','Saved on this device · waiting to sync'],
+ ['正在同步…','Syncing…'],['同步未完成 · 本机已保存','Sync incomplete · saved on this device'],['离线 · 本机已保存','Offline · saved on this device'],['同步有冲突','Sync conflict'],['处理同步冲突','Resolve sync conflict'],
  ['云同步额度暂受限制，学习进度已保存在本机。','Cloud sync is limited by the usage quota. Progress is saved on this device.'],
  ['手机与电脑同步','Phone and computer sync'],['检查同步状态…','Checking sync…'],['邮箱','Email'],['密码','Password'],['登录并同步','Sign in and sync'],['立即同步','Sync now'],['退出同步账号','Sign out'],
  ['为避免覆盖，已暂停同步。先备份两份进度，再选择继续哪一份。','Sync paused to preserve both versions. Back up both, then choose which to continue.'],['备份本机版本','Back up this device'],['备份云端版本','Back up cloud version'],['继续本机版本','Continue this device version'],['继续云端版本','Continue cloud version'],['导出九语备份','Export nine-language backup'],['导入九语备份','Import nine-language backup'],

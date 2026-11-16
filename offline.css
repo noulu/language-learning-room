@@ -7,6 +7,10 @@
 .offline-controls small { color:var(--muted); flex:1 0 100%; line-height:1.5; }
 .offline-controls button { min-height:44px; }
 .offline-status { color:var(--muted); font-size:13px; padding:10px 0; }
+.quick-sync { display:flex; align-items:center; gap:10px; min-height:48px; padding-bottom:4px; }
+.quick-sync[hidden] { display:none; }
+.quick-sync button { flex-shrink:0; min-height:44px; }
+.quick-sync span { color:var(--muted); font-size:12px; line-height:1.3; }
 
 #language { display:block; }
 @media (max-width:650px) { button,select { min-height:44px; } input,select,textarea { font-size:16px !important; } .app-shell { padding-left:max(14px,env(safe-area-inset-left)); padding-right:max(14px,env(safe-area-inset-right)); padding-bottom:env(safe-area-inset-bottom); } .top-actions { flex-wrap:wrap; } .ratings .rating { min-height:56px; } .helper-selects { flex-wrap:wrap; } }
