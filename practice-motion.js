@@ -36,7 +36,7 @@ function snapshot(element) {
   copy.querySelectorAll('button,input,textarea,select,a').forEach(node => node.setAttribute('tabindex', '-1'));
   return { copy, scrollTop: element.querySelector('.card-center')?.scrollTop ?? 0 };
 }
-function retire(snapshot, channel, opacity = 1) {
+function retire(snapshot, channel, opacity = 1, duration = 100) {
   if (!snapshot) return;
   const { copy, scrollTop } = snapshot;
   ghosts.set(channel, copy);
@@ -47,7 +47,7 @@ function retire(snapshot, channel, opacity = 1) {
     copy.remove();
     if (ghosts.get(channel) === copy) ghosts.delete(channel);
   };
-  const animation = fade(copy, opacity, 0, 100);
+  const animation = fade(copy, opacity, 0, duration);
   if (animation) animation.finished.then(remove, remove);
   else remove();
 }
@@ -84,10 +84,10 @@ export function renderPracticeMarkup(root, markup, key, revealed, scope) {
   } else root.replaceChildren(template.content);
   root.dataset.motionKey = key || ''; root.dataset.motionRevealed = String(revealed);
   root.dataset.motionScope = scope;
-  retire(outgoing, 'practice', .5);
+  retire(outgoing, 'practice', changingCard ? .25 : .5, changingCard ? 75 : 100);
   if (changingCard) {
-    fade(root.querySelector('.card-center'), .7, 1, 160);
-    fade(root.querySelector('.actions'), .7, 1, 160);
+    fade(root.querySelector('.card-center'), .86, 1, 105);
+    fade(root.querySelector('.actions'), .86, 1, 105);
   } else if (changingAnswer && revealed) {
     root.querySelectorAll('.answer, .word-example, .word-mnemonic, .mnemonic-pending').forEach(node => fade(node, .3, 1, 160));
     fade(root.querySelector('.ratings'), .7, 1, 160);

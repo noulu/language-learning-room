@@ -34,16 +34,16 @@ export class OfflineEngine {
       if(selected){const session=this.store.state.sessions[sessionId];requireValue(session?.languageId===id&&session.task?.id===taskId&&!this.learning.needsRefresh(session)&&selected.example?.hasAudio&&selected.example.entryId===entryId,'例句题目已更换。',409,'task_conflict');}
       else if(example)this.learning.validateExampleAudio(id,entryId,sessionId,taskId);else this.learning.validateAudioTask(id,entryId,sessionId,taskId);
     };
-    const record=await run(async()=>{await this.store.refresh();await this.ensureLanguage(id);this.syncRuntimeParagraphs();validate();const row=this.document.audio[`${entryId}:${kind}`];requireValue(row,'这项音频尚未准备。',404,'audio_unavailable');return row;});
+    const record=await run(async()=>{await this.store.refresh({reuse:true});await this.ensureLanguage(id);this.syncRuntimeParagraphs();validate();const row=this.document.audio[`${entryId}:${kind}`];requireValue(row,'这项音频尚未准备。',404,'audio_unavailable');return row;});
     const response=await publicAsset(this.cacheName,this.base,record,{save:false,fetcher:this.fetcher,signal}),bytes=await response.arrayBuffer();
-    await run(async()=>{await this.store.refresh();await this.ensureLanguage(id);validate();if(!example&&(kind==='word'||['recent-words','recent-paragraphs'].includes(this.store.state.sessions[sessionId]?.purpose)))await this.learning.audioReady(id,entryId,record.metadata,sessionId,taskId);});
+    await run(async()=>{await this.store.refresh({reuse:true});await this.ensureLanguage(id);validate();if(!example&&(kind==='word'||['recent-words','recent-paragraphs'].includes(this.store.state.sessions[sessionId]?.purpose)))await this.learning.audioReady(id,entryId,record.metadata,sessionId,taskId);});
     return new Response(bytes,{headers:{'Content-Type':record.type,'Cache-Control':'no-store'}});
   }
   async handle(url,options={}) {
     const parsed=new URL(url,this.base),path=parsed.pathname,method=options.method||'GET',data=()=>JSON.parse(options.body||'{}');
     try {
       if(path==='/api/audio')return await this.audio(parsed,options.runLocal,options.signal);
-      await this.store.refresh();let requested=this.store.state.selectedLanguage;
+      await this.store.refresh({reuse:true});let requested=this.store.state.selectedLanguage;
       if(method==='POST'&&path!=='/api/recording'){const row=data();requested=row.languageId??this.store.state.sessions[row.sessionId]?.languageId??requested;}
       if(method==='PATCH')requested=data().selectedLanguage??requested;
       if(path.startsWith('/api/session/'))requested=this.store.state.sessions[path.split('/').at(-1)]?.languageId??requested;

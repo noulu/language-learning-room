@@ -382,23 +382,27 @@ function cleanupMedia() {
   recordedURL = null; recordServerURL = null; recordStatus = '';
 }
 
-async function openSession(languageId = state.selectedLanguage, stage = state.selectedStage, patch = false, purpose) {
+async function openSession(languageId = state.selectedLanguage, stage = state.selectedStage, purpose) {
   if (busy || recorder?.state === 'recording' || recordSaving || recordOpening) { if (recorder?.state === 'recording' || recordSaving || recordOpening) say(t('busyRecord')); $('#language').value = state.selectedLanguage; return; }
   saveItem(); setBusy(true); say(); cleanupMedia();
   $('#dictionary').hidden = true; lookupToken++;
   if(purpose==='recent-paragraphs')say(uiLanguage==='zh'?'正在准备适合你的小段落…':'Preparing your passage…');
   try {
-    if (patch) state = await request('/api/state', { method: 'PATCH', body: JSON.stringify({ selectedLanguage: languageId, selectedStage: stage }) });
+    const previousLanguage = state.languages?.[state.selectedLanguage];
+    if (previousLanguage && Number.isInteger(session?.progress?.reviewCount)) previousLanguage.reviewCount = session.progress.reviewCount;
     const key = `${languageId}:${stage}`;
     // POST resumes the active server task. Cached IDs may refer to an inactive mode.
     session = await request('/api/session', { method: 'POST', body: JSON.stringify({ languageId, stage, ...(purpose ? {purpose} : {}), ...(stage === 1 ? { mode: recognition ? 'recognition' : 'mental-spelling' } : {}) }) });
     if (!session?.sessionId) throw new Error(t('noSession'));
+    // Opening the session also saves the selected language and stage.
+    Object.assign(state, { selectedLanguage: languageId, selectedStage: stage });
     say(session.generation?.message||'');
-    delete cache.activeAssessment;if(purpose)cache.activeRecent={languageId,sessionId:session.sessionId,purpose};else delete cache.activeRecent;cache.sessions[key] = session.sessionId; cache.stages[languageId] = stage; saveCache(); loadItem(); await hydrateTaskPrompt();
+    delete cache.activeAssessment;if(purpose)cache.activeRecent={languageId,sessionId:session.sessionId,purpose};else delete cache.activeRecent;cache.sessions[key] = session.sessionId; cache.stages[languageId] = stage; loadItem();
+    autoPlay(); saveCache();
   } catch (error) { session = null; say(error.message); }
   finally { setBusy(false); renderShell(); renderPractice(); }
   if (session?.sessionId) showPracticeTop();
-  if (task()) autoPlay();
+  void updateTaskPrompt();
   if (contentResumeLanguage) await resumePublishedContent();
   return Boolean(session?.sessionId);
 }
@@ -417,11 +421,11 @@ async function openAssessment(resumeId){
   if(busy||recorder?.state==='recording'||recordSaving||recordOpening)return;
   saveItem();setBusy(true);say();cleanupMedia();$('#dictionary').hidden=true;lookupToken++;
   try{session=resumeId?await request(`/api/session/${encodeURIComponent(resumeId)}`):await request('/api/assessment/session',{method:'POST',body:JSON.stringify({languageId:state.selectedLanguage})});
-    delete cache.activeRecent;cache.activeAssessment={languageId:state.selectedLanguage,sessionId:session.sessionId};loadItem();saveCache();
+    delete cache.activeRecent;cache.activeAssessment={languageId:state.selectedLanguage,sessionId:session.sessionId};loadItem();autoPlay();saveCache();
   }catch(error){say(error.message);delete cache.activeAssessment;}
   finally{setBusy(false);renderProgress();renderPractice();}
   if(session?.sessionId)showPracticeTop();
-  if(task())autoPlay();
+  return Boolean(session?.sessionId && session.purpose === 'assessment');
 }
 
 async function resumePublishedContent() {
@@ -429,7 +433,7 @@ async function resumePublishedContent() {
   const languageId = contentResumeLanguage; contentResumeLanguage = null;
   if (languageId !== state.selectedLanguage) return false; // switching back resumes that language through POST
   const previousTaskId = task()?.id;
-  const resumed = session?.purpose==='assessment'?await openAssessment(session.sessionId):await openSession(state.selectedLanguage,state.selectedStage,false,['recent-words','recent-paragraphs'].includes(session?.purpose)?session.purpose:undefined);
+  const resumed = session?.purpose==='assessment'?await openAssessment(session.sessionId):await openSession(state.selectedLanguage,state.selectedStage,['recent-words','recent-paragraphs'].includes(session?.purpose)?session.purpose:undefined);
   if (resumed && task()?.id !== previousTaskId) say(updatedItemMessage());
   return resumed;
 }
@@ -470,7 +474,7 @@ async function rate(rating) {
   const pending = saved.pending || { requestId: crypto.randomUUID(), rating, response };
   $('#practice').querySelector(`[data-rating="${pending.rating}"]`)?.setAttribute('data-submitted', '');
   saved.pending = pending; saveCache();
-  let conflictError = null;
+  let conflictError = null, previewAudioStarted = false;
   const submittedTaskId = task().id;
   const previousSession = session;
   try {
@@ -481,17 +485,26 @@ async function rate(rating) {
         reviewPreview = true;
         cleanupMedia();
         session = { ...previousSession, ...prepared, generation: null };
-        loadItem(); renderPractice(); showPracticeTop(true);
+        loadItem();
+        if (prepared.previewAudio && !contentResumeLanguage) { autoPlay(); previewAudioStarted = true; }
+        renderPractice(); showPracticeTop(true);
       },
     });
     const { pending: discardedPending, ...previousItem } = saved;
     cache.undoItems = { [session.sessionId]:{reviewTaskId:submittedTaskId,item:previousItem} };
     delete cache.items[oldKey];
-    if (reviewPreview) {
-      reviewPreview = false;
-      if (result.task?.id === task()?.id && revealed) saveItem();
-    } else cleanupMedia();
-    session = { ...previousSession, ...result, generation:result.generation??null }; loadItem(); saveCache(); say(result.generation?.message||'');
+    const samePreview = reviewPreview && result.sessionId === session.sessionId && result.task?.id === task()?.id;
+    reviewPreview = false;
+    if (!samePreview) cleanupMedia();
+    session = { ...previousSession, ...result, generation:result.generation??null };
+    if (samePreview) {
+      if (revealed || audioHeard) saveItem();
+      if (!previewAudioStarted && !contentResumeLanguage) autoPlay();
+    } else {
+      loadItem();
+      if (!contentResumeLanguage) autoPlay();
+    }
+    saveCache(); say(result.generation?.message||'');
   } catch (error) {
     if (reviewPreview) { reviewPreview = false; cleanupMedia(); session = previousSession; loadItem(); }
     if (expiredTaskError(error)) conflictError = error;
@@ -504,11 +517,10 @@ async function rate(rating) {
   if (!cache.items[oldKey]?.pending) void updateTaskPrompt();
   if (!cache.items[oldKey]?.pending) showPracticeTop(true);
   if (conflictError) { await restoreExpiredTask(conflictError, submittedTaskId); return; }
-  if (await resumePublishedContent()) return;
-  if (!cache.items[oldKey]?.pending && task()) autoPlay();
+  if (contentResumeLanguage) await resumePublishedContent();
 }
 
-async function playAudio(kind, automatic = false) {
+async function playAudio(kind) {
   deviceSpeech.stop();
   exampleAudio.pause();
   const url = task()?.audio?.[kind];
@@ -516,14 +528,23 @@ async function playAudio(kind, automatic = false) {
   const taskId = task().id;
   const token = ++audioToken; clearTimeout(audioTimer); audioFetch?.abort(); audio.pause();
   let prepared = false;
-  const status = message => { if (token === audioToken) { lastAudioStatus = message; if ($('#audio-status')) $('#audio-status').textContent = message; } };
-  audio.onplaying = () => { if (token !== audioToken || !prepared) return; clearTimeout(audioTimer); audioHeard = true; saveItem(); setBusy(busy); status(t('playing')); };
+  const status = message => {
+    if (token !== audioToken) return;
+    lastAudioStatus = message;
+    if ($('#practice').dataset.taskId === taskId && $('#audio-status')) $('#audio-status').textContent = message;
+  };
+  const heard = value => {
+    if (audioHeard === value) return;
+    audioHeard = value; saveItem();
+    if (requiresTaskAudio() && $('#practice').dataset.taskId === taskId) setBusy(busy);
+  };
+  audio.onplaying = () => { if (token !== audioToken || !prepared) return; clearTimeout(audioTimer); heard(true); status(t('playing')); };
   audio.onended = () => status(t('played'));
-  audio.onerror = () => { if (token !== audioToken || !prepared) return; clearTimeout(audioTimer); audioHeard = false; saveItem(); setBusy(busy); status(t('audioFailed')); };
+  audio.onerror = () => { if (token !== audioToken || !prepared) return; clearTimeout(audioTimer); heard(false); status(t('audioFailed')); };
   try {
     // Explicitly validate each playback against the task-specific API URL. A
     // loaded media element may otherwise replay a stale task without any HTTP.
-    audioHeard = false; saveItem(); setBusy(busy);
+    heard(false);
     status(uiLanguage === 'zh' ? '正在准备音频…' : 'Preparing audio…');
     const controller = new AbortController(); audioFetch = controller;
     audioTimer = setTimeout(() => controller.abort(), 45000);
@@ -539,14 +560,14 @@ async function playAudio(kind, automatic = false) {
     if (!blob.size || !blob.type.startsWith('audio/')) throw new Error(t('audioFailed'));
     if (lessonObjectURL) URL.revokeObjectURL(lessonObjectURL);
     lessonObjectURL = URL.createObjectURL(blob); prepared = true;
-    audio.src = lessonObjectURL; audio.load();
-    audioTimer = setTimeout(() => { if (token !== audioToken) return; audioHeard = false; saveItem(); setBusy(busy); status(t('audioFailed')); }, 15000);
+    audio.src = lessonObjectURL;
+    audioTimer = setTimeout(() => { if (token !== audioToken) return; heard(false); status(t('audioFailed')); }, 15000);
     await audio.play();
   }
   catch (error) {
     if (token !== audioToken) return;
     clearTimeout(audioTimer); audioFetch = null;
-    if (error.name !== 'NotAllowedError') { audioHeard = false; saveItem(); setBusy(busy); }
+    if (error.name !== 'NotAllowedError') heard(false);
     status(error.name === 'NotAllowedError' ? t('audioBlocked') : t('audioFailed'));
     await restoreExpiredTask(error, taskId, token);
   }
@@ -555,7 +576,7 @@ async function playAudio(kind, automatic = false) {
 function autoPlay() {
   if(session?.purpose==='recent-paragraphs')return;
   const stage = Number(task()?.practiceStage || task()?.stage);
-  if (stage < 4) void playAudio(stage === 3 ? 'sentence' : 'word', true);
+  if (stage < 4) void playAudio(stage === 3 ? 'sentence' : 'word');
 }
 
 async function toggleRecording() {
@@ -713,13 +734,13 @@ document.addEventListener('click', event => {
   const button = event.target.closest('button'); if (!button || button.disabled) return;
   if (button.dataset.close) return document.getElementById(button.dataset.close).close();
   if(button.id==='paragraph-generate'){void generateParagraph();button.blur();}
-  else if(button.id==='recent-paragraph-toggle'){void openSession(state.selectedLanguage,3,true,'recent-paragraphs');button.blur();}
-  else if(button.id==='recent-toggle'){void openSession(state.selectedLanguage,3,true,'recent-words');button.blur();}
-  else if(button.id==='review-return'){void openSession(state.selectedLanguage,3,true);button.blur();}
-  else if(button.id==='review-word-practice'){void openSession(state.selectedLanguage,2,true);button.blur();}
+  else if(button.id==='recent-paragraph-toggle'){void openSession(state.selectedLanguage,3,'recent-paragraphs');button.blur();}
+  else if(button.id==='recent-toggle'){void openSession(state.selectedLanguage,3,'recent-words');button.blur();}
+  else if(button.id==='review-return'){void openSession(state.selectedLanguage,3);button.blur();}
+  else if(button.id==='review-word-practice'){void openSession(state.selectedLanguage,2);button.blur();}
   else if(button.id==='assessment-start'){void openAssessment();button.blur();}
   else if(button.id==='assessment-return'){void openSession();button.blur();}
-  else if (button.dataset.stage) { void openSession(state.selectedLanguage, Number(button.dataset.stage), true); button.blur(); }
+  else if (button.dataset.stage) { void openSession(state.selectedLanguage, Number(button.dataset.stage)); button.blur(); }
   else if (button.dataset.rating) { void rate(Number(button.dataset.rating)); button.blur(); }
   else if (button.dataset.entry) void lookup(button.dataset.entry);
   else if (button.dataset.option) { chosen = Number(button.dataset.option); saveItem(); renderPractice(); }
@@ -737,7 +758,7 @@ document.addEventListener('click', event => {
   else if (button.id === 'help-button') $('#help-dialog').showModal();
   else if (button.id === 'dictionary-close') { $('#dictionary').hidden = true; lookupToken++; }
   else if (button.id === 'refresh-content') void refreshContent();
-  else if (button.id === 'practice-retry') void openSession(state.selectedLanguage,state.selectedStage,false,['recent-words','recent-paragraphs'].includes(session?.purpose)?session.purpose:undefined);
+  else if (button.id === 'practice-retry') void openSession(state.selectedLanguage,state.selectedStage,['recent-words','recent-paragraphs'].includes(session?.purpose)?session.purpose:undefined);
   else if (button.id === 'undo-button') { void undoRating(); button.blur(); }
 });
 document.addEventListener('input', event => { if (event.target.id === 'response') { responseText = event.target.value; saveItem(); } });
@@ -747,7 +768,7 @@ document.addEventListener('change', event => {
     const language = catalog.languages.find(item => item.id === languageId);
     const available = language?.availableStages || [1, 2, 3, 4];
     const preferred = Number(cache.stages[languageId] ?? language?.suggestedStage ?? 1);
-    void openSession(languageId, available.includes(preferred) ? preferred : available[0], true); event.target.blur();
+    void openSession(languageId, available.includes(preferred) ? preferred : available[0]); event.target.blur();
   } else if (event.target.id === 'recognition-mode') { recognition = event.target.value === 'recognition'; cache.recognition = recognition; saveCache(); void openSession(); }
   else if (event.target.id === 'input-mode') { listenFirst = event.target.value === 'listen'; cache.listenFirst = listenFirst; saveCache(); renderPractice(); }
 });
@@ -766,9 +787,12 @@ async function initialize() {
   try {
     [catalog, state] = await Promise.all([request('/api/catalog'), request('/api/state')]);
     if(cache.pendingSkin||!state.preferences.skin)await persistSkin(cache.pendingSkin??document.documentElement.dataset.theme??'light');
-    const priorAssessment=cache.activeAssessment,priorRecent=cache.activeRecent;renderShell(); setBusy(false); await openSession();
-    if(priorAssessment?.languageId===state.selectedLanguage)await openAssessment(priorAssessment.sessionId);
-    if(priorRecent?.languageId===state.selectedLanguage&&!priorAssessment)await openSession(state.selectedLanguage,3,true,priorRecent.purpose??'recent-words');
+    const priorAssessment=cache.activeAssessment,priorRecent=cache.activeRecent;renderShell(); setBusy(false);
+    if (priorAssessment?.languageId === state.selectedLanguage) {
+      if (!await openAssessment(priorAssessment.sessionId)) await openSession();
+    } else if (priorRecent?.languageId === state.selectedLanguage) {
+      await openSession(state.selectedLanguage,3,priorRecent.purpose??'recent-words');
+    } else await openSession();
     if(cache.pendingUndos[session?.sessionId])await undoRating();
     if (cache.refreshJob?.jobId) { refreshJob = cache.refreshJob; void pollRefresh(); }
     window.multiOffline?.sync?.resume?.();
