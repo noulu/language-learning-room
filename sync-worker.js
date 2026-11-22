@@ -8,7 +8,7 @@ self.onmessage=async({data})=>{
  if(data.type==='context-result'){const request=pending.get(data.id);pending.delete(data.id);request?.resolve(data.value);return;}
  if(data.type==='allowed'){allowed=data.value;return;}
  try{
-  initializing??=(async()=>{const engine={store:new OfflineStore(await openDatabase(),()=>{throw Error('学习数据库尚未就绪。');}),base:new URL('./',import.meta.url)};manager=new SupabaseSync(engine,data.config,{storage,canApply:()=>allowed,onStatus:(text,kind)=>self.postMessage({type:'status',text,kind}),onApply:()=>self.postMessage({type:'apply'})});manager.refreshContext=refreshContext;})();await initializing;
+  initializing??=(async()=>{const engine={store:new OfflineStore(await openDatabase(),()=>{throw Error('学习数据库尚未就绪。');}),base:new URL('./',import.meta.url)};manager=new SupabaseSync(engine,data.config,{storage,canApply:()=>allowed,onStatus:(text,kind)=>self.postMessage({type:'status',text,kind}),onApply:reason=>self.postMessage({type:'apply',reason})});manager.refreshContext=refreshContext;})();await initializing;
   await refreshContext();
   const result=await manager[data.method](...(data.args??[]));self.postMessage({type:'result',id:data.id,result});
  }catch(error){self.postMessage({type:'result',id:data.id,error:{message:error.message,status:error.status,retryUntil:error.retryUntil}});}

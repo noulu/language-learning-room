@@ -168,8 +168,9 @@ export class SupabaseSync {
   }
   async signOut() {await this.syncNow().catch(()=>{});clearTimeout(this.timer);this.storage.removeItem(AUTH_KEY);this.auth=null;this.status('已退出同步账号，本机进度保留。','signed-out');}
   readUI() { return portableUI(parse(this.storage.getItem('multi-offline-ui'))); }
-  async snapshot() {
-    const snapshot=await this.engine.store.snapshot(),state=snapshot.state,recordings={};
+  async snapshot(snapshot) {
+    snapshot??=await this.engine.store.snapshot();
+    const state=snapshot.state,recordings={};
     for(const row of snapshot.recordings){const bytes=await row.blob.arrayBuffer();recordings[row.id]={type:row.blob.type,bytes:bytes.byteLength,sha256:sha256(bytes)};}
     for(const [id,row] of Object.entries(state.recordings)){delete row.filename;row.url=`recording:${id}`;}
     state.jobs={};validateState(state);
@@ -196,8 +197,8 @@ export class SupabaseSync {
   async uploadRecordings(payload,remote) {
     for(const [id,row] of Object.entries(payload.recordings)){if(equal(row,remote?.recordings?.[id]))continue;const blob=await this.engine.store.recording(id);if(!blob||blob.size!==row.bytes||sha256(await blob.arrayBuffer())!==row.sha256)throw new Error('本机录音缺失或校验失败；尚未提交云端进度。');try{await this.request(`/storage/v1/object/travel-recordings/${this.auth.user.id}/${id}.${row.sha256}`,{body:blob,headers:{'Content-Type':row.type.split(';')[0]}});}catch(error){const existing=await this.request(`/storage/v1/object/authenticated/travel-recordings/${this.auth.user.id}/${id}.${row.sha256}`,{method:'GET',raw:true}).catch(()=>null);if(!existing)throw error;const bytes=await existing.arrayBuffer();if(bytes.byteLength!==row.bytes||sha256(bytes)!==row.sha256)throw error;}}
   }
-  async apply(payload,recordings) {
-    const normalized=normalize(payload,this.engine.base);await this.engine.store.restore(normalized.state,recordings);this.storage.setItem('multi-offline-ui',JSON.stringify(normalized.ui));this.storage.setItem('multi-offline-import-id',crypto.randomUUID());
+  async apply(payload,recordings,metadata) {
+    const normalized=normalize(payload,this.engine.base);await this.engine.store.restore(normalized.state,recordings,metadata);this.storage.setItem('multi-offline-ui',JSON.stringify(normalized.ui));this.storage.setItem('multi-offline-import-id',crypto.randomUUID());
   }
   // Network work never owns the learning lock. Only short snapshots/commits do.
   sync() {
@@ -359,21 +360,60 @@ export class SupabaseSync {
     }
     else this.status(this.configured?'登录后自动同步手机和电脑。':'云同步等待配置；本机学习和备份可用。',this.configured?'signed-out':'unconfigured');
   }
-  async conflictBackup(which) {
-    if(!this.conflict)throw new Error('没有待处理的冲突。');const payload=which==='local'?this.conflict.local:this.conflict.remote.payload;
-    const recordings=await this.downloadRecordings(payload),rows=[];
+  async backupBlob(payload,recordings) {
+    const rows=[];
     for(const row of recordings){const bytes=new Uint8Array(await row.blob.arrayBuffer());let value='';for(let offset=0;offset<bytes.length;offset+=16384)value+=String.fromCharCode(...bytes.subarray(offset,offset+16384));rows.push({id:row.id,type:row.blob.type,sha256:sha256(bytes),data:btoa(value)});}
     return new Blob([JSON.stringify({...normalize(payload,this.engine.base),format:'language-room-multi-backup',version:1,exportedAt:new Date().toISOString(),recordings:rows})],{type:'application/json'});
   }
+  async conflictBackup(which) {
+    if(!this.conflict)throw new Error('没有待处理的冲突。');
+    const payload=which==='local'?this.conflict.local:this.conflict.remote.payload;
+    return this.backupBlob(payload,await this.downloadRecordings(payload));
+  }
+  async savedDeviceBackup() {
+    const uid=this.auth?.user?.id;
+    const archive=uid&&await this.meta(`sync-device-backup:${uid}`);
+    if(!archive)throw new Error('没有可导出的本机旧进度。');
+    return this.backupBlob(archive.payload,archive.recordings);
+  }
+  async useCloudVersion() {
+    if(!this.conflict)throw new Error('冲突已处理。');
+    const uid=this.auth?.user?.id;
+    if(!uid)throw new Error('请先登录同步账号。');
+    const stored=await this.engine.store.snapshot(),local=await this.snapshot(stored);
+    const owner=await this.meta('sync-owner');
+    if(this.auth?.user?.id!==uid||(owner&&owner!==uid))throw new Error('同步账号与本机进度所属账号不一致。');
+    const fresh=await this.remote(this.conflict.remote,uid);
+    if(!fresh.payload)throw new Error('云端目前没有可用的进度。');
+    this.validate(fresh.payload);
+    const recordings=await this.downloadRecordings(fresh.payload);
+    const originalRecordings=stored.recordings.filter(row=>Object.hasOwn(local.state.recordings,row.id));
+    if(originalRecordings.length!==Object.keys(local.state.recordings).length)throw new Error('本机录音不完整，无法保留完整的本机备份。');
+    await this.run(async()=>{
+      if(!await this.matches(local)||!this.canApply())throw new Error('本机有新操作。请结束当前操作后再试。');
+      if(this.auth?.user?.id!==uid)throw new Error('同步账号已更改，请重新登录后再试。');
+      const at=new Date().toISOString();
+      await this.apply(fresh.payload,recordings,[
+        [`sync-device-backup:${uid}`,{payload:local,recordings:originalRecordings}],
+        [`sync-cloud-choice:${uid}`,at],
+        [`sync-base:${uid}`,{revision:fresh.revision,payload:fresh.payload}],
+        [`sync-pending:${uid}`,null],
+        ['sync-owner',uid],
+      ]);
+    });
+    this.conflict=null;
+    this.status('已同步 · 已使用云端版本','synced');
+    this.onApply('cloud-choice');
+  }
   resolve(which) {return this.networkRun(async()=>{
+    if(which==='cloud')return this.useCloudVersion();
     if(!this.conflict)throw new Error('冲突已处理。');const fresh=await this.remote(this.conflict.remote,this.auth.user.id);if(fresh.revision!==this.conflict.remote.revision){this.conflict=null;return this.syncLocked();}
     const local=await this.snapshot();if(!equal(local,this.conflict.local)){this.conflict=null;return this.syncLocked();}
-    const payload=which==='local'?local:this.conflict.remote.payload,recordings=await this.downloadRecordings(payload);let revision=fresh.revision;
-    if(which==='local'){await this.uploadRecordings(payload,fresh.payload);const result=await this.writeRemote(fresh,payload,local);if(result.conflict){this.conflict=null;return this.syncLocked();}revision=result.revision;}
+    const payload=local;
+    await this.uploadRecordings(payload,fresh.payload);const result=await this.writeRemote(fresh,payload,local);if(result.conflict){this.conflict=null;return this.syncLocked();}
     const applied=await this.run(async()=>{
       if(!await this.matches(local)||!this.canApply()){this.status('本机有新操作，请重新选择同步版本。','conflict');return false;}
-      if(which!=='local')await this.apply(payload,recordings);
-      await this.meta(`sync-base:${this.auth.user.id}`,{revision,payload});return true;
-    });if(!applied)return;this.conflict=null;this.status('已同步选择的进度','synced');if(which!=='local')this.onApply();
+      await this.meta(`sync-base:${this.auth.user.id}`,{revision:result.revision,payload});return true;
+    });if(!applied)return;this.conflict=null;this.status('已同步选择的进度','synced');
   });}
 }

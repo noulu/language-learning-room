@@ -59,11 +59,12 @@ export class OfflineStore{
     scan('receipts',(key,value)=>{receipts[key]=value;});scan('recordings',(key,value)=>recordings.push({id:key,blob:value}));
     await done;if(state)state.receipts=receipts;return {state,recordings,revision};
   }
-  async restore(state,recordings){
-    const tx=this.db.transaction(['state','receipts','recordings'],'readwrite'),done=finished(tx),receipts=tx.objectStore('receipts');receipts.clear();
+  async restore(state,recordings,metadata=[]){
+    const tx=this.db.transaction(['state','receipts','recordings'],'readwrite'),done=finished(tx),receipts=tx.objectStore('receipts'),stateTable=tx.objectStore('state');receipts.clear();
     for(const [id,row] of Object.entries(state.receipts))receipts.put(row,id);
-    const compact={...state,receipts:{}};tx.objectStore('state').put(compact,'current');
-    const revision=crypto.randomUUID();tx.objectStore('state').put(revision,'state-revision');
+    const compact={...state,receipts:{}};stateTable.put(compact,'current');
+    const revision=crypto.randomUUID();stateTable.put(revision,'state-revision');
+    for(const [key,value] of metadata)stateTable.put(value,key);
     const table=tx.objectStore('recordings');table.clear();for(const row of recordings)table.put(row.blob,row.id);
     await done;this.state=structuredClone(compact);this.loadedRevision=revision;
   }

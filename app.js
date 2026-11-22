@@ -21,6 +21,7 @@ cache.sessions ||= {}; cache.items ||= {}; cache.stages ||= {}; cache.undoItems 
 let uiLanguage = cache.uiLanguage === 'en' ? 'en' : 'zh';
 const t = key => strings[uiLanguage][key] || key;
 let catalog, state, session, revealed = false, busy = false, refreshJob = null, refreshTimer = null;
+let vocabularyReviewTimer;
 let contentResumeLanguage = null, reviewPreview = false;
 let recorder = null, stream = null, recordedURL = null, recordSaving = false, recordOpening = false, audioToken = 0, audioTimer = null, lookupToken = 0;
 let audioFetch = null, lessonObjectURL = null;
@@ -44,7 +45,7 @@ const isArabic = () => state?.selectedLanguage === 'ar';
 const say = (message = '') => { $('#notice').textContent = message; $('#notice').hidden = !message; };
 const updatedItemMessage = () => uiLanguage === 'zh' ? '内容或题目已更新，已恢复当前练习，请重新作答。' : 'The content or current item has changed. Resumed the current exercise; answer it again.';
 const expiredTaskError = error => error.status === 409 && ['content_changed', 'task_conflict', 'session_conflict'].includes(error.code);
-const adaptiveHelp=()=>uiLanguage==='zh'?'词汇水平来自跨频段的词义自评抽测，各段按有源词形总量加权，不按最高词频排名或难度分数换算。重来计0，困难计部分认识0.5，正常与轻松都计1；Easy不会额外加词。首次揭晓前答案冻结，学会并复习同词不刷测量进度。六题一组可随时返回原练习，首次练习选重来或困难时计入今日新学，选正常或轻松时记为已会。每日新词目标默认20，可按语言调整。新词占比按最近20个不同词的评分，在约20%到50%之间逐步调整。吃力且暂无到期复习时，会在一小轮后提示稍后继续。词汇练习中，同一个词至少间隔一小时才会再出。做过足够的首次练习后，当天可穿插一道校准。输入训练也会穿插词义抽测。范围仅是宽泛参考，自评、词义及来源筛选都有误差；词族、低频尾部和听说能力未测，七语不直接比较。测量包缺失时只显示当前课程范围，保留原学习方式。':'Vocabulary level uses stratified word-meaning self-ratings weighted by sourced word-form populations, never maximum rank or difficulty. Again=0, Hard=.5, Good/Easy=1; Easy adds no extra words. First pre-reveal answers freeze; learning and repeating a measured word do not inflate progress. Six-word groups preserve your original place. On first practice, Again and Hard count as new words studied. Good and Easy count as already known. The daily goal defaults to 20 and can be adjusted per language. The new-word share gradually adjusts between about 20% and 50% using ratings of the latest 20 distinct words. When words are challenging and no reviews are due, a short round ends with a return time. In vocabulary practice, a word waits at least an hour before appearing again. Vocabulary practice can include one calibration question after enough first checks. Input practice also includes vocabulary probes. Broad ranges are not validated confidence; self-ratings, senses and source qualification may be biased. Word families, low-frequency tail and productive skills are unmeasured; languages are not directly comparable. Missing assessment packs retain course-only estimates.';
+const adaptiveHelp=()=>uiLanguage==='zh'?'词汇水平来自跨频段的词义自评抽测，各段按有源词形总量加权，不按最高词频排名或难度分数换算。重来计0，困难计部分认识0.5，正常与轻松都计1；Easy不会额外加词。首次揭晓前答案冻结，学会并复习同词不刷测量进度。六题一组可随时返回原练习，首次练习选重来或困难时计入今日新学，选正常或轻松时记为已会。每日新词目标默认20，可按语言调整。通常每三道复习穿插一道新词。忘记的词约5分钟后重练，困难的词约12分钟后重练，答稳后次日复习。暂无到期复习时先学一小批，等巩固题到期再继续。做过足够的首次练习后，当天可穿插一道校准。输入训练也会穿插词义抽测。范围仅是宽泛参考，自评、词义及来源筛选都有误差；词族、低频尾部和听说能力未测，七语不直接比较。测量包缺失时只显示当前课程范围，保留原学习方式。':'Vocabulary level uses stratified word-meaning self-ratings weighted by sourced word-form populations, never maximum rank or difficulty. Again=0, Hard=.5, Good/Easy=1; Easy adds no extra words. First pre-reveal answers freeze; learning and repeating a measured word do not inflate progress. Six-word groups preserve your original place. On first practice, Again and Hard count as new words studied. Good and Easy count as already known. The daily goal defaults to 20 and can be adjusted per language. Usually one new word follows three reviews. Forgotten words return after about five minutes, difficult words after about twelve. Once you recall them, review them the next day. When no reviews are due, start with a small batch and return to it when it is ready. Vocabulary practice can include one calibration question after enough first checks. Input practice also includes vocabulary probes. Broad ranges are not validated confidence; self-ratings, senses and source qualification may be biased. Word families, low-frequency tail and productive skills are unmeasured; languages are not directly comparable. Missing assessment packs retain course-only estimates.';
 
 
 function saveItem() {
@@ -270,7 +271,19 @@ function wordCueMarkup(item) {
   return `<span class="word-surface">${esc(item.display)}</span><span class="word-reading"${!revealed?' aria-hidden="true"':''}>${revealed?esc(reading):''}</span>`;
 }
 
+function scheduleVocabularyReview() {
+  clearTimeout(vocabularyReviewTimer);
+  if (document.hidden || task() || !session?.progress?.vocabularyRest) return;
+  const due = Date.parse(session.progress.nextDue);
+  if (!Number.isFinite(due)) return;
+  const pending = session;
+  vocabularyReviewTimer = setTimeout(() => {
+    if (session === pending && !busy && !document.hidden && !document.querySelector('dialog[open]')) void openSession();
+  }, Math.max(1000, due - Date.now() + 500));
+}
+
 function renderPractice() {
+  scheduleVocabularyReview();
   $('#practice').classList.toggle('review-practice',['recent-words','recent-paragraphs'].includes(session?.purpose));
   if ($('#recent-controls')) {
     $('#recent-controls').hidden = state?.selectedStage !== 3 || session?.purpose === 'assessment';
@@ -302,7 +315,7 @@ function renderPractice() {
     let nextReview = '';
     const newVocabulary = session?.progress?.newVocabulary;
     if (state?.selectedStage === 2 && !session?.purpose && newVocabulary) {
-      if (session.progress.vocabularyRest) message = uiLanguage === 'zh' ? '最近的新词比较吃力，这一小轮先到这里。稍后继续巩固。' : 'Recent new words have been challenging. This short round is complete. Come back later to reinforce them.';
+      if (session.progress.vocabularyRest) message = uiLanguage === 'zh' ? '几道巩固题稍后到期，时间到了会自动继续。' : 'A few words will be ready to review shortly. Practice resumes automatically.';
       else if (newVocabulary.goal === 0) message = uiLanguage === 'zh' ? '今日只复习，暂无到期词。' : 'Review only today. No words are due.';
       else message = uiLanguage === 'zh' ? '当前教材的新词已经练过，暂无到期词。' : 'You’ve practiced all the new words in this course. No words are due.';
       const due = Date.parse(session.progress.nextDue);
@@ -774,7 +787,9 @@ document.addEventListener('change', event => {
   else if (event.target.id === 'input-mode') { listenFirst = event.target.value === 'listen'; cache.listenFirst = listenFirst; saveCache(); renderPractice(); }
 });
 document.addEventListener('submit', event => { if (event.target.id === 'settings-form') void saveSettings(event); });
-window.addEventListener('pagehide', () => { if (!window.multiOffline?.restoring) saveItem(); stream?.getTracks().forEach(track => track.stop()); clearTimeout(refreshTimer); audio.pause(); deviceSpeech.stop(); });
+document.addEventListener('visibilitychange', scheduleVocabularyReview);
+document.addEventListener('close', scheduleVocabularyReview, true);
+window.addEventListener('pagehide', () => { if (!window.multiOffline?.restoring) saveItem(); stream?.getTracks().forEach(track => track.stop()); clearTimeout(refreshTimer); clearTimeout(vocabularyReviewTimer); audio.pause(); deviceSpeech.stop(); });
 
 async function persistSkin(value){
   if(!state)return;cache.pendingSkin=value;saveCache();state.preferences.skin=value;

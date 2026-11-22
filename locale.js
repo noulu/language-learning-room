@@ -1,6 +1,10 @@
 // Travel controls have their own lifetime, outside the shared settings renderer.
 // Keep their original text so switching UI language also updates existing status.
 const labels=new Map([
+ ['使用云端版本','Use cloud version'],['使用云端版本会更新此设备，并自动保留替换前的本机进度。','Using the cloud version updates this device and automatically saves a copy of its previous progress.'],
+ ['正在应用云端版本…','Applying cloud version…'],['已同步 · 已使用云端版本','Synced · using cloud version'],['导出替换前的本机进度','Export previous device progress'],['已导出替换前的本机进度。','Previous device progress exported.'],
+ ['没有可导出的本机旧进度。','No previous device progress is available to export.'],['云端目前没有可用的进度。','No cloud progress is available.'],['本机录音不完整，无法保留完整的本机备份。','A device recording is missing. A complete device backup could not be saved.'],
+ ['本机有新操作。请结束当前操作后再试。','This device has new changes. Finish the current operation and try again.'],['同步账号已更改，请重新登录后再试。','The sync account changed. Sign in again and retry.'],
  ['本机已保存 · 等待同步','Saved on this device · waiting to sync'],
  ['正在同步…','Syncing…'],['同步未完成 · 本机已保存','Sync incomplete · saved on this device'],['离线 · 本机已保存','Offline · saved on this device'],['同步有冲突','Sync conflict'],['处理同步冲突','Resolve sync conflict'],
  ['云同步额度暂受限制，学习进度已保存在本机。','Cloud sync is limited by the usage quota. Progress is saved on this device.'],
@@ -20,6 +24,7 @@ const labels=new Map([
  ['网站正在更新，请先完成更新，再管理旧缓存。','Finish the website update before managing old caches.'],['请先关闭其他学习室标签页或窗口，再清理存储。','Close other language-room tabs or windows before cleanup.'],['另一个学习室页面正在下载或整理，请稍后再试。','Another tab is downloading or cleaning resources. Try again shortly.'],['上次完整离线校验已通过；可检查实际保存内容。','The last full offline check passed. You can check currently saved resources.'],
 ]);
 const patterns=[
+ [/^未能使用云端版本。(.+)$/u,(_,reason)=>`Could not use the cloud version. ${localize(reason)}`],
  [/^已同步 · (.+)$/u,(_,time)=>`Synced · ${time}`],
  [/^当前直接在线学习。完整离线音频约 (.+) MB，教材另占空间；不下载也能使用。$/u,(_,n)=>`Online learning is ready. Optional offline audio is about ${n} MB, plus lessons.`],
  [/^正在核对已有文件 (.+) \/ (.+)，此计数不是重新下载。$/u,(_,n,total)=>`Checking saved files ${n} / ${total}; these are not new downloads.`],
