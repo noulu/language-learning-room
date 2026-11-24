@@ -6,8 +6,6 @@
 .offline-controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; padding:12px 0; border-bottom:1px solid var(--line); }
 .offline-controls small { color:var(--muted); flex:1 0 100%; line-height:1.5; }
 .offline-controls button { min-height:44px; }
-#primary-sync-controls { width:100%; }
-[data-sync-device="follower"] :is([data-rating], #undo-button, #assessment-start, #record) { display:none; }
 .offline-status { color:var(--muted); font-size:13px; padding:10px 0; }
 .quick-sync { display:flex; align-items:center; gap:10px; min-height:48px; padding-bottom:4px; }
 .quick-sync[hidden] { display:none; }

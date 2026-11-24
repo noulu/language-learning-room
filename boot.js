@@ -10,32 +10,24 @@ const base=new URL('./',location.href),nativeFetch=window.fetch.bind(window),she
 const panel=document.createElement('main');panel.className='installer';panel.innerHTML='<p>LANGUAGE ROOM</p><h1>九门语言，打开就学。</h1><p>正在加载程序和当前语言教材，音频在练习时逐条在线播放，无需下载整包。</p><p id="boot-status" role="status">正在打开学习室…</p><button type="button" id="retry-load" hidden>重新打开</button>';document.body.append(panel);
 const downloadSection=document.createElement('section');downloadSection.className='offline-download';downloadSection.innerHTML='<h3>离线学习（可选）</h3><p>平时直接在线学习，播放当前词句时才加载音频，不另外保存整包。需要断网学习时，再下载全部九语教材和音频。</p><p id="install-status" role="status">正在检查离线包…</p><progress id="install-progress" max="1" value="0" hidden></progress><button id="download-course" type="button">下载完整离线包</button><p>iPhone 可在 Safari“分享 → 添加到主屏幕”，从图标进入。下载请使用 Wi-Fi，保持页面打开。</p>';
 const status=downloadSection.querySelector('#install-status'),progress=downloadSection.querySelector('progress'),download=downloadSection.querySelector('button');
-const followerWrites=new Set(['/api/review','/api/undo','/api/recording','/api/assessment/session','/api/paragraphs/generate']);
-const followerMessage='这台设备只跟随主档，进度由主设备更新。';
 let registration,engine,cache,release,documentPack,manager,storageTools;
 export function saveFile(blob,name){const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=name;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
 const message=text=>{status.textContent=text;};
 function controls(syncConfig) {
-  const controls=document.createElement('section');controls.className='offline-controls';controls.innerHTML='<div><strong>手机与电脑同步</strong><p id="sync-status" role="status">检查同步状态…</p></div><form id="sync-login"><label>邮箱 <input id="sync-email" type="email" autocomplete="username" required></label><label>密码 <input id="sync-password" type="password" autocomplete="current-password" required></label><button type="submit">登录并同步</button></form><button type="button" id="sync-now">立即同步</button><button type="button" id="sync-signout">退出同步账号</button><div id="sync-conflict" hidden><p>使用云端版本会更新此设备，并自动保留替换前的本机进度。</p><button type="button" id="choose-cloud">使用云端版本</button><button type="button" id="choose-local">继续本机版本</button><button type="button" id="backup-local-conflict">备份本机版本</button><button type="button" id="backup-cloud-conflict">备份云端版本</button></div><button type="button" id="export-before-cloud" hidden>导出替换前的本机进度</button><button type="button" id="export-backup">导出九语备份</button><button type="button" id="import-backup">导入九语备份</button><input id="backup-file" type="file" accept="application/json,.json" hidden><span id="backup-status" role="status"></span><small>登录后，进度、设置、草稿和私人录音同步至你的专属云存档。离线时先存本机，重新联网后自动同步。两台设备同时离线修改同一语言时，会保留两份并请你选择，绝不静默覆盖。请定期导出备份。</small>';
+  const controls=document.createElement('section');controls.className='offline-controls';controls.innerHTML='<div><strong>手机与电脑同步</strong><p id="sync-status" role="status">检查同步状态…</p></div><form id="sync-login"><label>邮箱 <input id="sync-email" type="email" autocomplete="username" required></label><label>密码 <input id="sync-password" type="password" autocomplete="current-password" required></label><button type="submit">登录并同步</button></form><button type="button" id="sync-now">立即同步</button><button type="button" id="sync-signout">退出同步账号</button><div id="sync-conflict" hidden><p>选定的版本会在同账号的设备上继续使用，替换前的存档会自动备份。</p><button type="button" id="choose-cloud">使用云端版本</button><button type="button" id="choose-local">使用本机版本</button><button type="button" id="backup-local-conflict">备份本机版本</button><button type="button" id="backup-cloud-conflict">备份云端版本</button></div><button type="button" id="export-before-cloud" hidden>导出替换前的本机进度</button><button type="button" id="export-replaced-cloud" hidden>导出替换前的云档</button><button type="button" id="export-backup">导出九语备份</button><button type="button" id="import-backup">导入九语备份</button><input id="backup-file" type="file" accept="application/json,.json" hidden><span id="backup-status" role="status"></span><small>登录同一账号后，手机和电脑都可以继续练习。离线进度先存在本机，联网后自动同步。</small>';
   document.querySelector('#settings-dialog .panel-heading').after(controls);
-  const primaryControls=document.createElement('div');
-  primaryControls.id='primary-sync-controls';
-  primaryControls.hidden=true;
-  primaryControls.innerHTML='<p></p><button type="button" id="set-primary-sync">设此浏览器为主档</button><button type="button" id="export-before-primary" hidden>导出替换前的云档</button>';
-  controls.querySelector('#sync-conflict').after(primaryControls);
-  const primaryHelp=primaryControls.querySelector('p'),primaryButton=primaryControls.querySelector('#set-primary-sync'),primaryExport=primaryControls.querySelector('#export-before-primary');
   const indicator=document.createElement('p');indicator.className='offline-status';shell.querySelector('.learning-tools').append(indicator);
   const quickSync=document.createElement('div');
   quickSync.className='quick-sync';
   quickSync.hidden=true;
-  quickSync.innerHTML='<button type="button" id="quick-sync-now" class="quiet">立即同步</button><span id="quick-sync-status" role="status"></span><span id="sync-follow-notice" hidden>跟随主档 · 在主设备记分</span>';
+  quickSync.innerHTML='<button type="button" id="quick-sync-now" class="quiet">立即同步</button><span id="quick-sync-status" role="status"></span>';
   shell.querySelector('.topbar').after(quickSync);
   const quickButton=quickSync.querySelector('button'),quickStatus=quickSync.querySelector('span'),settingsSync=controls.querySelector('#sync-now');
   const syncStatus=controls.querySelector('#sync-status'),conflictPanel=controls.querySelector('#sync-conflict'),beforeCloud=controls.querySelector('#export-before-cloud');
-  const followerNotice=quickSync.querySelector('#sync-follow-notice'),legacyLocal=controls.querySelector('#choose-local'),importButton=controls.querySelector('#import-backup');
-  const cloudApplied='已同步 · 已使用云端版本';
-  let justApplied=false,backupUser;
-  try{justApplied=sessionStorage.getItem('multi-offline-cloud-choice')==='1';sessionStorage.removeItem('multi-offline-cloud-choice');}catch{}
+  const cloudExport=controls.querySelector('#export-replaced-cloud'),importButton=controls.querySelector('#import-backup');
+  const choiceStatus={'cloud-choice':'已同步 · 已使用云端版本','shared-choice':'已同步 · 已采用选定的存档'};
+  let choiceReceipt,backupUser;
+  try{choiceReceipt=choiceStatus[sessionStorage.getItem('multi-offline-cloud-choice')];sessionStorage.removeItem('multi-offline-cloud-choice');}catch{}
   const showStatus=(text,compact=text)=>{
     syncStatus.textContent=text;indicator.textContent=text;quickStatus.textContent=compact;
   };
@@ -47,7 +39,6 @@ function controls(syncConfig) {
     if(backupUser===user)beforeCloud.hidden=!saved;
   };
   const compactSyncStatus={
-    error:'同步未完成 · 本机已保存',
     pending:'本机已保存 · 等待同步',
     offline:'离线 · 本机已保存',
     conflict:'同步有冲突',
@@ -55,51 +46,31 @@ function controls(syncConfig) {
   manager=new SupabaseSync(engine,syncConfig,{
     fetcher:nativeFetch,canApply:()=>window.travelCanReload?.()!==false,
     onStatus:(text,kind)=>{
-      if(!['synced','normal'].includes(kind))justApplied=false;
-      const showCloudReceipt=justApplied&&manager.deviceRole!=='primary'&&manager.deviceRole!=='follower';
-      const display=showCloudReceipt?cloudApplied:text;
-      showStatus(display,showCloudReceipt?display:compactSyncStatus[kind]??text);
+      if(!['synced','normal'].includes(kind))choiceReceipt=undefined;
+      const display=choiceReceipt??text;
+      showStatus(display,choiceReceipt??compactSyncStatus[kind]??text);
       conflictPanel.hidden=kind!=='conflict';
       controls.querySelector('#sync-login').hidden=Boolean(manager.auth);controls.querySelector('#sync-signout').hidden=!manager.auth;
       quickSync.hidden=!manager.configured||!manager.auth;
       quickButton.textContent=kind==='conflict'?'处理同步冲突':'立即同步';
       if(backupUser!==manager.auth?.user?.id)void showDeviceBackup(manager.auth?.user?.id);
     },
-    onDevice:(role,hasBackup)=>{
-      try {
-        if(role&&manager.auth)localStorage.setItem('multi-offline-device-mode',JSON.stringify({uid:manager.auth.user.id,role,hasBackup}));
-        else localStorage.removeItem('multi-offline-device-mode');
-      }catch{}
-      shell.dataset.syncDevice=role??'';
-      legacyLocal.hidden=Boolean(role);
-      primaryControls.hidden=!role;
-      primaryButton.hidden=role==='primary';
-      primaryButton.textContent=role==='follower'?'转移主档到此浏览器':'设此浏览器为主档';
-      primaryExport.hidden=!hasBackup||role!=='primary';
-      followerNotice.hidden=role!=='follower';
-      importButton.hidden=role==='follower';
-      primaryHelp.textContent=role==='primary'?'这个浏览器是主档。其他设备登录同一账号后跟随这里的进度。':
-        role==='follower'?followerMessage:'设为主档后，只有这里能上传进度。手机等其他设备会跟随这里的存档。';
-    },
+    onCloudBackup:available=>{cloudExport.hidden=!available;},
     onApply:reason=>{
-      if(reason==='cloud-choice'){try{sessionStorage.setItem('multi-offline-cloud-choice','1');}catch{}}
+      if(choiceStatus[reason]){try{sessionStorage.setItem('multi-offline-cloud-choice',reason);}catch{}}
       window.multiOffline.restoring=true;location.reload();
     },
   });
   window.multiOffline.sync=manager;
-  try {
-    const device=JSON.parse(localStorage.getItem('multi-offline-device-mode'));
-    if(device?.uid===manager.auth?.user?.id&&['shared','follower','primary'].includes(device?.role))manager.deviceMode(device.role,device.hasBackup);
-  }catch{}
   backgroundSync(manager,base);
   let busy=false;const feedback=controls.querySelector('#backup-status');
   try{const receipt=JSON.parse(localStorage.getItem('multi-offline-last-import'));if(receipt&&Number.isInteger(receipt.reviews)&&Number.isInteger(receipt.recordings))feedback.textContent=`最近一次本机导入：${new Date(receipt.at).toLocaleString()}，${receipt.reviews.toLocaleString()} 条练习记录、${receipt.recordings} 份录音。当前保留的各语言历史见下方“已保存的累计学习记录”；云端是否完成请看上方同步状态。`;}catch{}
   const action=callback=>async event=>{event?.preventDefault();if(busy)return;busy=true;try{await callback(event);}catch(error){feedback.textContent=error.message;}finally{busy=false;}};
   controls.querySelector('#sync-login').onsubmit=action(async()=>{const email=controls.querySelector('#sync-email').value,password=controls.querySelector('#sync-password').value;controls.querySelector('#sync-password').value='';controls.querySelector('#sync-login button').focus();await manager.signIn(email,password);});
   const manualSync=action(async()=>{
-    justApplied=false;
+    choiceReceipt=undefined;
     quickButton.disabled=settingsSync.disabled=true;
-    quickStatus.textContent='正在同步…';
+    showStatus('正在同步…');
     try {
       const joinedExistingSync=Boolean(manager.scheduledRun);
       await manager.syncNow();
@@ -115,32 +86,25 @@ function controls(syncConfig) {
   settingsSync.onclick=manualSync;
   controls.querySelector('#sync-signout').onclick=action(()=>manager.signOut());
   controls.querySelector('#export-backup').onclick=action(async()=>{saveFile(await exportBackup(engine),`language-room-backup-${new Date().toISOString().slice(0,10)}.json`);feedback.textContent='已生成九语备份，请保存文件。';});
-  importButton.onclick=()=>{if(manager.deviceRole!=='follower')controls.querySelector('#backup-file').click();};
+  importButton.onclick=()=>controls.querySelector('#backup-file').click();
   controls.querySelector('#backup-file').onchange=action(async event=>{const file=event.target.files[0];event.target.value='';if(!file)return;feedback.textContent='正在校验备份，请稍候…';try{const payload=await readBackup(file,engine),reviews=Object.values(payload.state.languages).reduce((sum,language)=>sum+language.reviews.length,0);if(!confirm(localize(`备份包含 ${reviews.toLocaleString()} 条练习记录、${payload.recordings.length} 份录音。导入会替换本机进度；登录后自动同步，有冲突时需选择版本。继续前会先导出本机旧备份。确定导入？`))){feedback.textContent='已取消导入，现有进度保留。';return;}saveFile(await exportBackup(engine),`language-room-before-import-${Date.now()}.json`);await manager.run(()=>restoreBackup(engine,payload));location.reload();}catch(error){feedback.textContent=`导入未完成：${error.message} 请保留原备份。`;feedback.scrollIntoView({block:'nearest'});}});
   for(const which of ['local','cloud']) {
     controls.querySelector(`#backup-${which}-conflict`).onclick=action(async()=>saveFile(await manager.conflictBackup(which),`language-room-${which}-${Date.now()}.json`));
   }
-  legacyLocal.onclick=action(async()=>{if(!confirm(localize('将继续本机版本。选择前会下载另一版本的完整备份，请保存好。是否继续？')))return;saveFile(await manager.conflictBackup('cloud'),`language-room-alternate-${Date.now()}.json`);await manager.resolve('local');});
-  const conflictButtons=[...conflictPanel.querySelectorAll('button'),primaryButton,settingsSync,quickButton];
-  primaryButton.onclick=action(async()=>{
-    if(manager.deviceRole==='follower'&&!confirm(localize('将改由此浏览器保存主档，替换前的云档会自动备份。确定转移？')))return;
-    for(const button of conflictButtons)button.disabled=true;
-    showStatus('正在设立主档…');
-    try{await manager.setPrimary();}
-    catch(error){showStatus(`未能设立主档。${error.message}`);}
-    finally{for(const button of conflictButtons)button.disabled=false;}
-  });
-  primaryExport.onclick=action(async()=>{
-    saveFile(await manager.savedPrimaryBackup(),`language-room-before-primary-${Date.now()}.json`);
+  cloudExport.onclick=action(async()=>{
+    saveFile(await manager.savedCloudBackup(),`language-room-previous-cloud-${Date.now()}.json`);
     feedback.textContent='已导出替换前的云档。';
   });
-  controls.querySelector('#choose-cloud').onclick=action(async()=>{
-    for(const button of conflictButtons)button.disabled=true;
-    showStatus('正在应用云端版本…');
-    try{await manager.resolve('cloud');}
-    catch(error){showStatus(`未能使用云端版本。${error.message}`);}
-    finally{for(const button of conflictButtons)button.disabled=false;}
-  });
+  const conflictButtons=[...conflictPanel.querySelectorAll('button'),settingsSync,quickButton];
+  for(const [which,label] of [['cloud','云端版本'],['local','本机版本']]){
+    controls.querySelector(`#choose-${which}`).onclick=action(async()=>{
+      for(const button of conflictButtons)button.disabled=true;
+      showStatus(`正在应用${label}…`);
+      try{await manager.resolve(which);}
+      catch(error){showStatus(`未能使用${label}。${error.message}`);}
+      finally{for(const button of conflictButtons)button.disabled=false;}
+    });
+  }
   beforeCloud.onclick=action(async()=>{
     saveFile(await manager.savedDeviceBackup(),`language-room-before-cloud-${Date.now()}.json`);
     feedback.textContent='已导出替换前的本机进度。';
@@ -160,7 +124,7 @@ function controls(syncConfig) {
   const notify=()=>{update.hidden=topUpdate.hidden=!registration.waiting;},watch=()=>{registration.installing?.addEventListener('statechange',notify);notify();};watch();registration.addEventListener('updatefound',watch);
   update.onclick=topUpdate.onclick=action(async()=>{if(!registration.waiting)return;if(storageTools?.busy||window.travelCanReload?.()===false){feedback.textContent='请先结束当前操作或存储管理，再更新网站。';return;}await manager.run(async()=>{navigator.serviceWorker.addEventListener('controllerchange',()=>location.reload(),{once:true});registration.waiting.postMessage('activate-update');});});
   manager.start();
-  if(justApplied&&manager.auth){quickSync.hidden=false;showStatus(cloudApplied);}
+  if(choiceReceipt&&manager.auth){quickSync.hidden=false;showStatus(choiceReceipt);}
   if(backupUser!==manager.auth?.user?.id)void showDeviceBackup(manager.auth?.user?.id);
 }
 async function launch() {
@@ -170,9 +134,6 @@ async function launch() {
   const configResponse=await cache.match(new URL('sync-config.json',base)),syncConfig=await configResponse.json();
   shell.hidden=false;panel.remove();controls(syncConfig);
   window.fetch=(input,options={})=>{const url=new URL(typeof input==='string'?input:input.url,location.href);if(url.origin===location.origin&&url.pathname.startsWith('/api/')){
-    if(manager.deviceRole==='follower'&&(options.method??'GET')!=='GET'&&followerWrites.has(url.pathname)){
-      return Promise.resolve(new Response(JSON.stringify({error:{code:'read_only_device',message:localize(followerMessage)}}),{status:403,headers:{'Content-Type':'application/json'}}));
-    }
     if(url.pathname==='/api/word-example')return engine.exampleReader.handle(url);
     const execute=async()=>{const result=await engine.handle(url,{...options,runLocal:callback=>manager.run(callback)});if(result.ok&&(options.method??'GET')!=='GET')manager.schedule();return result;};
     return url.pathname==='/api/audio'?execute():manager.run(execute);

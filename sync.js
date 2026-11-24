@@ -36,43 +36,20 @@ async function unpack(payload) {
   return JSON.parse(await new Blob(chunks).text());
 }
 export class SupabaseSync {
-  constructor(engine,config,{fetcher=globalThis.fetch.bind(globalThis),storage=localStorage,onStatus=()=>{},onApply=()=>{},onDevice=()=>{},canApply=()=>true}={}) {
-    this.engine=engine;this.config=config;this.fetcher=fetcher;this.storage=storage;this.onStatus=onStatus;this.onApply=onApply;this.onDevice=onDevice;this.canApply=canApply;
+  constructor(engine,config,{fetcher=globalThis.fetch.bind(globalThis),storage=localStorage,onStatus=()=>{},onApply=()=>{},onCloudBackup=()=>{},canApply=()=>true}={}) {
+    this.engine=engine;this.config=config;this.fetcher=fetcher;this.storage=storage;this.onStatus=onStatus;this.onApply=onApply;this.onCloudBackup=onCloudBackup;this.canApply=canApply;
     this.auth=parse(storage.getItem(AUTH_KEY));this.queue=Promise.resolve();this.syncQueue=Promise.resolve();this.configured=false;
     if(config?.url&&config?.publishableKey){const url=new URL(config.url);if(url.protocol!=='https:'||!url.hostname.endsWith('.supabase.co')||url.pathname!=='/')throw new Error('同步服务地址无效。');const key=config.publishableKey;if(key.startsWith('sb_secret_')||key.startsWith('ey')&&parse(atob(key.split('.')[1].replaceAll('-','+').replaceAll('_','/')))?.role!=='anon')throw new Error('浏览器只能使用公开密钥。');this.configured=true;this.origin=url.origin;}
   }
   status(text,kind='normal'){this.kind=kind;this.onStatus(text,kind);}
-  deviceMode(role,hasBackup=false){
-    if(this.deviceRole===role&&this.primaryBackup===hasBackup)return;
-    this.deviceRole=role;
-    this.primaryBackup=hasBackup;
-    this.onDevice(role,hasBackup);
-  }
-  deviceToken(){
-    this.deviceTokenPromise??=new Promise((resolve,reject)=>{
-      // Tabs and the worker must share one identity, including at first sign-in.
-      const tx=this.engine.store.db.transaction('state','readwrite'),table=tx.objectStore('state');
-      const read=table.get('sync-device-token');
-      let token;
-      read.onsuccess=()=>{
-        token=read.result;
-        if(!token){
-          token=(crypto.randomUUID()+crypto.randomUUID()).replaceAll('-','');
-          table.put(token,'sync-device-token');
-        }
-      };
-      tx.oncomplete=()=>resolve(token);
-      tx.onabort=()=>reject(tx.error);
-    }).catch(error=>{this.deviceTokenPromise=null;throw error;});
-    return this.deviceTokenPromise;
-  }
   async remote(baseline, userId) {
     const headers = { 'Content-Type': 'application/json' };
-    const head = await this.request('/rest/v1/rpc/travel_head', {
-      headers:{...headers,'X-Language-Room-Device':await this.deviceToken()},body:{},
-    });
-    this.deviceMode(head.deviceRole,head.primaryBackup===true);
-    const protocol = { revision:head.revision, incremental:head.delta === 1, checkpoint:head.checkpoint === true, deviceRole:head.deviceRole };
+    const head = await this.request('/rest/v1/rpc/travel_head', {headers,body:{}});
+    this.onCloudBackup(head.cloudBackup===true);
+    const protocol = {
+      revision:head.revision, incremental:head.delta===1, checkpoint:head.checkpoint===true,
+      conflictResolution:head.conflictResolution===1, resolvedRevision:head.resolvedRevision,
+    };
     if (baseline && head.revision === baseline.revision) {
       return { ...protocol, payload: baseline.payload };
     }
@@ -106,11 +83,12 @@ export class SupabaseSync {
     if (cacheKey && this.auth?.user?.id === userId) {
       await this.meta(cacheKey, { revision: response.revision, payload: response.payload });
     }
-    return { ...protocol, checkpoint:protocol.checkpoint && response.revision === head.revision,
+    if (response.revision !== head.revision) return this.remote({revision:response.revision,payload:portablePayload(payload)},userId);
+    return { ...protocol,
       revision: response.revision, payload: portablePayload(payload) };
   }
   async writeRemote(remote, payload, local) {
-    const headers = {'Content-Type':'application/json','X-Language-Room-Device':await this.deviceToken()};
+    const headers = {'Content-Type':'application/json'};
     const writeFull = async () => this.request('/rest/v1/rpc/travel_write', {
       headers, body:{ expected_revision:remote.revision, new_payload:await pack(payload) },
     });
@@ -169,23 +147,38 @@ export class SupabaseSync {
   async request(route,{method='POST',body,headers={},auth=true,retry=true,raw=false}={}) {
     if(!this.configured)throw new Error('云同步尚未配置。');
     if(auth&&(!this.auth||this.auth.expires_at*1000<Date.now()+60000))await this.refreshAuth();
+    const endpoint=route.split('/').at(-1);
+    const download=endpoint==='travel_read'||endpoint==='travel_primary_backup'||raw;
+    const readTransport=download||['travel_head','travel_delta_read','travel_delta_receipt'].includes(endpoint);
+    const timeout=download?60_000:route.endsWith('/travel_resolve_progress')?45_000:20_000;
+    const controller=new AbortController();
+    // Keep the deadline active when the server has sent headers but is still
+    // transferring a larger save. This also works without AbortSignal.timeout.
+    const timer=setTimeout(()=>controller.abort(),timeout);
     let response;
-    try{response=await this.fetcher(this.origin+route,{method,headers:{apikey:this.config.publishableKey,...(auth?{Authorization:`Bearer ${this.auth.access_token}`}:{'Content-Type':'application/json'}),...headers},body:body instanceof Blob?body:body===undefined?undefined:JSON.stringify(body),credentials:'omit',referrerPolicy:'no-referrer',signal:AbortSignal.timeout(20000)});}catch{throw new Error('暂时无法连接同步服务；进度仍保存在本机，联网后重试。');}
+    try {
+      response=await this.fetcher(this.origin+route,{method,headers:{apikey:this.config.publishableKey,...(auth?{Authorization:`Bearer ${this.auth.access_token}`}:{'Content-Type':'application/json'}),...headers},body:body instanceof Blob?body:body===undefined?undefined:JSON.stringify(body),credentials:'omit',referrerPolicy:'no-referrer',signal:controller.signal});
+      if(response.ok){
+        if(raw)return new Response(await response.arrayBuffer(),{status:response.status,headers:response.headers});
+        return response.status===204?null:await response.json();
+      }
+    } catch(error) {
+      if(error instanceof SyntaxError)throw new Error('同步服务返回了无法读取的数据，本机进度已保留。');
+      const message=controller.signal.aborted?'同步服务响应超时，本机进度已保留。':
+        '无法连接同步服务。请确认手机或电脑能访问网络，本机进度已保留。';
+      throw Object.assign(new Error(message),{readTransport});
+    } finally {
+      clearTimeout(timer);
+    }
     if(response.status===401&&auth&&retry){await this.refreshAuth();return this.request(route,{method,body,headers,auth,retry:false,raw});}
     if(!response.ok){
       if(response.status===409)return {conflict:true};
-      if(response.status===403&&(await response.clone().json().catch(()=>null))?.message==='travel_primary_write_required'){
-        const error=new Error('这台设备只跟随主档，进度由主设备更新。');
-        error.primaryRequired=true;
-        throw error;
-      }
       const error = new Error(response.status===400||response.status===401?'登录已失效或邮箱、密码不正确，请重新登录。':response.status===402?'云同步额度暂受限制，学习进度已保存在本机。':response.status===413?'同步空间或文件大小达到免费额度；本机进度已保留。':'同步服务暂不可用，本机进度已保留。');
       error.status = response.status;
       const retryAfter = response.headers.get('Retry-After');
       if (retryAfter) error.retryUntil = /^\d+$/.test(retryAfter) ? Date.now() + Number(retryAfter)*1000 : Date.parse(retryAfter);
       throw error;
     }
-    return raw?response:response.status===204?null:response.json();
   }
   saveAuth(auth) {if(!auth?.access_token||!auth.refresh_token||!auth.user?.id)throw new Error('登录响应无效。');this.auth={...auth,expires_at:auth.expires_at??Math.floor(Date.now()/1000)+auth.expires_in};this.storage.setItem(AUTH_KEY,JSON.stringify(this.auth));}
   async refreshAuth() {
@@ -198,7 +191,7 @@ export class SupabaseSync {
     const owner=await this.meta('sync-owner');if(owner&&owner!==result.user?.id)throw new Error('这台设备已有另一账号的进度。请先导出备份，并在独立浏览器配置中使用新账号。');
     this.saveAuth(result);await this.meta('sync-owner',result.user.id);return this.syncNow();
   }
-  async signOut() {await this.syncNow().catch(()=>{});clearTimeout(this.timer);this.storage.removeItem(AUTH_KEY);this.auth=null;this.deviceMode(undefined);this.status('已退出同步账号，本机进度保留。','signed-out');}
+  async signOut() {await this.syncNow().catch(()=>{});clearTimeout(this.timer);this.storage.removeItem(AUTH_KEY);this.auth=null;this.onCloudBackup(false);this.status('已退出同步账号，本机进度保留。','signed-out');}
   readUI() { return portableUI(parse(this.storage.getItem('multi-offline-ui'))); }
   async snapshot(snapshot) {
     snapshot??=await this.engine.store.snapshot();
@@ -246,6 +239,7 @@ export class SupabaseSync {
     this.auth=parse(this.storage.getItem(AUTH_KEY))||this.auth;
     const uid=this.auth.user.id,owner=await this.meta('sync-owner');if(owner&&owner!==uid)throw new Error('同步账号与本机进度所属账号不一致。');
     const baseline=await this.recoverPending(await this.meta(`sync-base:${uid}`),uid);
+    const comparedRevision=baseline?.revision??await this.meta(`sync-conflict-seen:${uid}`);
     if (baseline) {
       baseline.payload = portablePayload(baseline.payload);
       baseline.localBase = portablePayload(baseline.localBase);
@@ -253,13 +247,22 @@ export class SupabaseSync {
     for(let attempt=0;attempt<3;attempt++) {
       const stored=await this.engine.store.snapshot(),local=await this.snapshot(stored),remote=await this.remote(baseline,uid);
       if(remote.payload)this.validate(remote.payload);
-      if(remote.deviceRole==='follower')return this.followPrimary(uid,baseline,local,stored,remote);
+      if(Number.isSafeInteger(comparedRevision)&&remote.payload&&remote.resolvedRevision>comparedRevision){
+        return this.applyCloudVersion(uid,local,stored,remote,'已同步 · 已采用选定的存档');
+      }
       let merged;
-      if(!remote.payload||remote.deviceRole==='primary')merged=local;
+      if(!remote.payload)merged=local;
       else if(!baseline&&Object.values(local.state.languages).every(language=>language.reviews.length===0)&&!Object.keys(local.recordings).length)merged=remote.payload;
       else if(equal(local,remote.payload))merged=local;
       else {
-        try{merged=mergeProgress(baseline?.localBase??baseline?.payload,local,remote.payload);}catch(error){if(!(error instanceof SyncConflict))throw error;this.conflict={local,remote};this.status('两台设备的同一语言都有改动，请选择要继续的进度；两份都可备份。','conflict');return;}
+        try{merged=mergeProgress(baseline?.localBase??baseline?.payload,local,remote.payload);}
+        catch(error){
+          if(!(error instanceof SyncConflict))throw error;
+          if(!baseline)await this.meta(`sync-conflict-seen:${uid}`,remote.revision);
+          this.conflict={local,remote};
+          this.status('两份存档都有无法自动合并的改动，请选一份继续。','conflict');
+          return;
+        }
       }
       const recordings=equal(merged,local)?null:await this.downloadRecordings(merged);
       // Typing may continue while requests are in flight. Do not discard a new draft.
@@ -270,10 +273,7 @@ export class SupabaseSync {
         if(recordings){const tx=this.engine.store.db.transaction('recordings','readwrite');for(const row of recordings)tx.objectStore('recordings').put(row.blob,row.id);await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);});}
         await this.uploadRecordings(merged,remote.payload);
         if(!await this.matches(local)){this.status('本机已保存 · 继续同步最新进度','pending');return;}
-        const response=await this.writeRemote(remote,merged,local).catch(error=>{
-          if(error.primaryRequired)return {conflict:true};
-          throw error;
-        });
+        const response=await this.writeRemote(remote,merged,local);
         if(response.conflict)continue;revision=response.revision;
       }
       const changed=!equal(local,merged);
@@ -294,40 +294,10 @@ export class SupabaseSync {
       if(!applied)return;
       this.conflict=null;
       const time=new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
-      this.status(remote.deviceRole==='primary'?`已同步 · 本机主档 · ${time}`:`已同步 · ${time}`,'synced');
+      this.status(`已同步 · ${time}`,'synced');
       if(changed)this.onApply();return;
     }
     this.status('另一台设备正在同步，本机已保存，稍后自动重试。','pending');
-  }
-  async followPrimary(uid,baseline,local,stored,remote){
-    this.conflict=null;
-    if(!remote.payload)throw new Error('云端目前没有可用的进度。');
-    const localPracticeChanged=baseline?.following&&(
-      !equal(local.recordings,baseline.payload.recordings)||
-      Object.entries(local.state.languages).some(([id,language])=>!equal(language.reviews,baseline.payload.state.languages[id].reviews))
-    );
-    if(!baseline?.following||baseline.revision!==remote.revision||localPracticeChanged){
-      const changed=!equal(local,remote.payload);
-      const recordings=changed?await this.downloadRecordings(remote.payload):null;
-      const applied=await this.run(async()=>{
-        if(!await this.matches(local)||!this.canApply()||this.auth?.user?.id!==uid)return false;
-        const next={revision:remote.revision,payload:remote.payload,following:true};
-        if(changed){
-          const metadata=[[`sync-base:${uid}`,next],[`sync-pending:${uid}`,null],['sync-owner',uid]];
-          if(!baseline?.following||localPracticeChanged)metadata.push(...this.deviceArchive(uid,local,stored.recordings));
-          await this.apply(remote.payload,recordings,metadata);
-        }else await this.meta(`sync-base:${uid}`,next);
-        return true;
-      });
-      if(!applied){
-        this.status('跟随主档 · 当前操作结束后更新','pending');
-        return;
-      }
-      this.status('已同步 · 跟随主档','synced');
-      if(changed)this.onApply();
-      return;
-    }
-    this.status('已同步 · 跟随主档','synced');
   }
   noteUIChange() {
     if (!this.started) return;
@@ -391,7 +361,7 @@ export class SupabaseSync {
 
   automatic({ flush = false, resume = false } = {}) {
     const now = Date.now();
-    if (!this.configured || !this.auth || !navigator.onLine || this.conflict || this.scheduledRun || !this.canApply()) return;
+    if (!this.configured || !this.auth || !navigator.onLine || this.scheduledRun || !this.canApply()) return;
     if (document.visibilityState !== 'visible' && !flush) return;
     if (now < (this.retryState().until ?? 0) || (!flush && now - (this.lastAttempt ?? -Infinity) < 3000)) return;
     if (!resume && !flush && now < this.dirtyDue) return;
@@ -452,7 +422,7 @@ export class SupabaseSync {
       [`sync-cloud-choice:${uid}`,new Date().toISOString()],
     ];
   }
-  async savedPrimaryBackup(){
+  async savedCloudBackup(){
     const result=await this.request('/rest/v1/rpc/travel_primary_backup',{
       headers:{'Content-Type':'application/json'},body:{},
     });
@@ -461,74 +431,86 @@ export class SupabaseSync {
     this.validate(payload);
     return this.backupBlob(payload,await this.downloadRecordings(payload));
   }
-  setPrimary(){return this.networkRun(async()=>{
+  async acceptVersion(uid, revision, payload) {
+    const tx=this.engine.store.db.transaction('state','readwrite'),table=tx.objectStore('state');
+    table.put({revision,payload},`sync-base:${uid}`);
+    table.put(null,`sync-pending:${uid}`);
+    table.put(uid,'sync-owner');
+    await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error);});
+  }
+  async applyCloudVersion(uid,local,stored,remote,message,recordings) {
+    const changed=!equal(local,remote.payload);
+    const archive=changed?this.deviceArchive(uid,local,stored.recordings):[];
+    if(changed)recordings??=await this.downloadRecordings(remote.payload);
+    const applied=await this.run(async()=>{
+      if(this.auth?.user?.id!==uid||!this.canApply()||!await this.matches(local))return false;
+      if(changed)await this.apply(remote.payload,recordings,[
+        ...archive,
+        [`sync-base:${uid}`,{revision:remote.revision,payload:remote.payload}],
+        [`sync-pending:${uid}`,null],
+        ['sync-owner',uid],
+      ]);
+      else await this.acceptVersion(uid,remote.revision,remote.payload);
+      return true;
+    });
+    this.conflict=null;
+    if(!applied){
+      this.status('已在云端选定存档 · 本机操作结束后继续同步','pending');
+      this.schedule();
+      return;
+    }
+    this.status(message,'synced');
+    if(changed)this.onApply(message==='已同步 · 已使用云端版本'?'cloud-choice':'shared-choice');
+  }
+  resolve(which) {return this.networkRun(async()=>{
+    if(!['local','cloud'].includes(which))throw new Error('请选择本机或云端版本。');
+    if(!this.conflict)throw new Error('冲突已处理。');
     const uid=this.auth?.user?.id;
     if(!uid)throw new Error('请先登录同步账号。');
     const owner=await this.meta('sync-owner');
     if(owner&&owner!==uid)throw new Error('同步账号与本机进度所属账号不一致。');
-    const baseline=await this.meta(`sync-base:${uid}`);
-    const local=await this.snapshot();
-    const packed=await pack(local);
+    const stored=await this.engine.store.snapshot(),local=await this.snapshot(stored);
+    const displayed=this.conflict.remote;
     const commandId=crypto.randomUUID();
-    const headers={'Content-Type':'application/json','X-Language-Room-Device':await this.deviceToken()};
+    const packed=which==='local'?await pack(local):null;
+    let remote=displayed;
     for(let attempt=0;attempt<3;attempt++){
-      const remote=await this.remote(this.conflict?.remote??baseline,uid);
-      if(!remote.deviceRole)throw new Error('云端暂未启用主档模式。');
-      if(remote.deviceRole==='primary')return this.syncLocked();
-      if(remote.payload)this.validate(remote.payload);
-      await this.uploadRecordings(local,remote.payload);
+      remote=await this.remote(remote,uid);
+      if(!remote.payload)throw new Error('云端目前没有可用的进度。');
+      this.validate(remote.payload);
+      if(remote.resolvedRevision>displayed.revision){
+        return this.applyCloudVersion(uid,local,stored,remote,'已同步 · 已采用选定的存档');
+      }
+      let recordings;
+      if(which==='local')await this.uploadRecordings(local,remote.payload);
+      else if(!equal(local,remote.payload)){
+        this.deviceArchive(uid,local,stored.recordings);
+        recordings=await this.downloadRecordings(remote.payload);
+      }
       if(!await this.matches(local)||!this.canApply())throw new Error('本机有新操作。请结束当前操作后再试。');
       if(this.auth?.user?.id!==uid)throw new Error('同步账号已更改，请重新登录后再试。');
-      const result=await this.request('/rest/v1/rpc/travel_set_primary',{
-        headers,body:{expected_revision:remote.revision,new_payload:packed,command_id:commandId},
+      if(!remote.conflictResolution){
+        if(which==='cloud')return this.applyCloudVersion(uid,local,stored,remote,'已同步 · 已使用云端版本',recordings);
+        throw new Error('云端同步服务需要更新后才能使用本机版本。');
+      }
+      const result=await this.request('/rest/v1/rpc/travel_resolve_progress',{
+        headers:{'Content-Type':'application/json'},
+        body:{expected_revision:remote.revision,choice:which,new_payload:packed,command_id:commandId},
       });
       if(result.conflict)continue;
-      if(!Number.isSafeInteger(result.revision)||result.revision!==remote.revision+1)throw new Error('无法核实主档是否保存，请重新同步。');
-      await this.meta(`sync-base:${uid}`,{revision:result.revision,payload:local});
-      await this.meta(`sync-pending:${uid}`,null);
-      await this.meta('sync-owner',uid);
+      if(result.revision!==remote.revision+1)throw new Error('无法核实所选版本是否已保存，请重新同步。');
+      this.onCloudBackup(result.cloudBackup===true);
+      if(which==='cloud'){
+        return this.applyCloudVersion(uid,local,stored,{...remote,revision:result.revision},'已同步 · 已使用云端版本',recordings);
+      }
+      await this.run(async()=>{
+        if(this.auth?.user?.id===uid)await this.acceptVersion(uid,result.revision,local);
+      });
       this.conflict=null;
-      this.deviceMode('primary',result.primaryBackup===true);
-      this.status('已同步 · 本机主档','synced');
+      this.status('已同步 · 已使用本机版本','synced');
       if(!await this.matches(local))this.schedule();
       return;
     }
-    throw new Error('云档在更新，请再试一次。');
-  });}
-  async useCloudVersion() {
-    if(!this.conflict)throw new Error('冲突已处理。');
-    const uid=this.auth?.user?.id;
-    if(!uid)throw new Error('请先登录同步账号。');
-    const stored=await this.engine.store.snapshot(),local=await this.snapshot(stored);
-    const owner=await this.meta('sync-owner');
-    if(this.auth?.user?.id!==uid||(owner&&owner!==uid))throw new Error('同步账号与本机进度所属账号不一致。');
-    const fresh=await this.remote(this.conflict.remote,uid);
-    if(!fresh.payload)throw new Error('云端目前没有可用的进度。');
-    this.validate(fresh.payload);
-    const recordings=await this.downloadRecordings(fresh.payload);
-    await this.run(async()=>{
-      if(!await this.matches(local)||!this.canApply())throw new Error('本机有新操作。请结束当前操作后再试。');
-      if(this.auth?.user?.id!==uid)throw new Error('同步账号已更改，请重新登录后再试。');
-      await this.apply(fresh.payload,recordings,[
-        ...this.deviceArchive(uid,local,stored.recordings),
-        [`sync-base:${uid}`,{revision:fresh.revision,payload:fresh.payload}],
-        [`sync-pending:${uid}`,null],
-        ['sync-owner',uid],
-      ]);
-    });
-    this.conflict=null;
-    this.status('已同步 · 已使用云端版本','synced');
-    this.onApply('cloud-choice');
-  }
-  resolve(which) {return this.networkRun(async()=>{
-    if(which==='cloud')return this.useCloudVersion();
-    if(!this.conflict)throw new Error('冲突已处理。');const fresh=await this.remote(this.conflict.remote,this.auth.user.id);if(fresh.revision!==this.conflict.remote.revision){this.conflict=null;return this.syncLocked();}
-    const local=await this.snapshot();if(!equal(local,this.conflict.local)){this.conflict=null;return this.syncLocked();}
-    const payload=local;
-    await this.uploadRecordings(payload,fresh.payload);const result=await this.writeRemote(fresh,payload,local);if(result.conflict){this.conflict=null;return this.syncLocked();}
-    const applied=await this.run(async()=>{
-      if(!await this.matches(local)||!this.canApply()){this.status('本机有新操作，请重新选择同步版本。','conflict');return false;}
-      await this.meta(`sync-base:${this.auth.user.id}`,{revision:result.revision,payload});return true;
-    });if(!applied)return;this.conflict=null;this.status('已同步选择的进度','synced');
+    throw new Error('云端存档正在更新，请再试一次。');
   });}
 }
