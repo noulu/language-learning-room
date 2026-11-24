@@ -10,6 +10,7 @@ export function backgroundSync(manager,base){
   worker.onmessage=({data})=>{
    if(data.type==='context'){worker.postMessage({type:'context-result',id:data.id,value:context()});return;}
    if(data.type==='storage'){if(data.value===null)manager.storage.removeItem(data.key);else manager.storage.setItem(data.key,data.value);return;}
+   if(data.type==='device'){manager.deviceMode(data.role,data.hasBackup);return;}
    if(data.type==='status'){manager.conflict=data.kind==='conflict'?{background:true}:null;manager.status(data.text,data.kind);return;}
    if(data.type==='apply'){applying=manager.engine.store.refresh().then(()=>manager.onApply(data.reason));return;}
    if(data.type==='result'){const request=pending.get(data.id);pending.delete(data.id);if(data.error)request?.reject(Object.assign(new Error(data.error.message),data.error));else applying.then(()=>request?.resolve(data.result),error=>request?.reject(error));}
@@ -19,6 +20,7 @@ export function backgroundSync(manager,base){
  function call(method,args=[]){return new Promise((resolve,reject)=>{try{start();const id=++serial;pending.set(id,{resolve,reject});worker.postMessage({id,method,args,config:manager.config});}catch(error){reject(error);}});}
  manager.sync=()=>{if(!manager.configured||!manager.auth){manager.status(manager.configured?'登录后自动同步手机和电脑。':'云同步等待配置；本机学习和备份可用。',manager.configured?'signed-out':'unconfigured');return Promise.resolve();}if(inFlight)return inFlight;inFlight=call('sync').finally(()=>{inFlight=null;});return inFlight;};
  manager.conflictBackup=which=>call('conflictBackup',[which]);manager.resolve=which=>call('resolve',[which]);
+ manager.setPrimary=()=>call('setPrimary');manager.savedPrimaryBackup=()=>call('savedPrimaryBackup');
  // Let a busy editor/recording immediately suspend background application.
  for(const name of ['focusin','focusout','input','keydown','pointerdown'])document.addEventListener(name,()=>{worker?.postMessage({type:'allowed',value:manager.canApply()});},true);
 }
