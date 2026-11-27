@@ -71,11 +71,13 @@ function controls(syncConfig) {
     choiceReceipt=undefined;
     quickButton.disabled=settingsSync.disabled=true;
     showStatus('正在同步…');
+    const backgroundNotice=setTimeout(()=>showStatus('同步在后台继续 · 可以继续练习'),2000);
     try {
       const joinedExistingSync=Boolean(manager.scheduledRun);
       await manager.syncNow();
       if(joinedExistingSync&&manager.kind==='pending'&&manager.dirtySince!==undefined)await manager.syncNow();
     } finally {
+      clearTimeout(backgroundNotice);
       quickButton.disabled=settingsSync.disabled=false;
     }
   });

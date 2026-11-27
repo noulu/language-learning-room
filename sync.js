@@ -7,6 +7,8 @@ const QUIET_MS = 12_000;
 const BATCH_MS = 45_000;
 const CHECK_MS = 120_000;
 const MAX_DELTA_BYTES = 512 * 1024;
+const MAX_UNPACKED_CHECKPOINT_BYTES = 8 * 1024 * 1024;
+const CHECK_TIMEOUT_MS = 7_000;
 const parse=value=>{try{return JSON.parse(value);}catch{return null;}};
 
 function portableUI(value) {
@@ -21,9 +23,9 @@ function portableUI(value) {
 function portablePayload(payload) {
   return payload && { ...payload, ui: portableUI(payload.ui) };
 }
-async function pack(payload) {
+async function pack(payload,serialized) {
   if(!globalThis.CompressionStream||!globalThis.DecompressionStream)return payload;
-  const bytes=new Uint8Array(await new Response(new Blob([JSON.stringify(payload)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+  const bytes=new Uint8Array(await new Response(new Blob([serialized??JSON.stringify(payload)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
   let text='';for(let offset=0;offset<bytes.length;offset+=16384)text+=String.fromCharCode(...bytes.subarray(offset,offset+16384));
   return {format:payload.format,version:1,state:{},encoding:'gzip-base64',packed:btoa(text)};
 }
@@ -48,6 +50,7 @@ export class SupabaseSync {
     this.onCloudBackup(head.cloudBackup===true);
     const protocol = {
       revision:head.revision, incremental:head.delta===1, checkpoint:head.checkpoint===true,
+      packedCheckpoints:head.packedCheckpoints===1,
       conflictResolution:head.conflictResolution===1, resolvedRevision:head.resolvedRevision,
     };
     if (baseline && head.revision === baseline.revision) {
@@ -89,16 +92,27 @@ export class SupabaseSync {
   }
   async writeRemote(remote, payload, local) {
     const headers = {'Content-Type':'application/json'};
-    const writeFull = async () => this.request('/rest/v1/rpc/travel_write', {
-      headers, body:{ expected_revision:remote.revision, new_payload:await pack(payload) },
+    const writeFull = async packed => this.request('/rest/v1/rpc/travel_write', {
+      headers, body:{ expected_revision:remote.revision, new_payload:packed??await pack(payload) },
     });
     if (!remote.incremental) return writeFull();
-    const change = remote.checkpoint ? makeDelta(remote.payload, payload) : null;
-    const useDelta = change && new Blob([JSON.stringify(change)]).size <= MAX_DELTA_BYTES;
+    let change = remote.payload && (remote.checkpoint||remote.packedCheckpoints) ? makeDelta(remote.payload, payload) : null;
+    if(change&&new Blob([JSON.stringify(change)]).size>MAX_DELTA_BYTES)change=null;
+    let checkpoint=remote.checkpoint&&change?null:payload;
+    if(checkpoint){
+      const serialized=JSON.stringify(payload);
+      if(new Blob([serialized]).size>MAX_UNPACKED_CHECKPOINT_BYTES){
+        checkpoint=await pack(payload,serialized);
+        if(checkpoint===payload)throw new Error('此存档需要浏览器支持压缩才能同步。本机进度已保留。');
+        if(!remote.packedCheckpoints)return writeFull(checkpoint);
+      } else {
+        change=null;
+      }
+    }
     const pending = {
       parent:remote.revision,
       commit:crypto.randomUUID(),
-      ...(useDelta ? {change} : {payload}),
+      ...(checkpoint ? {payload} : {change}),
       ...(equal(local,payload) ? {} : {localBase:local}),
     };
     const pendingKey = `sync-pending:${this.auth.user.id}`;
@@ -106,7 +120,7 @@ export class SupabaseSync {
     try {
       return await this.request('/rest/v1/rpc/travel_delta_write', {
         headers,
-        body:{expected_revision:pending.parent,commit_id:pending.commit,change:useDelta?change:null,checkpoint:useDelta?null:payload},
+        body:{expected_revision:pending.parent,commit_id:pending.commit,change,checkpoint},
       });
     } catch (error) {
       if (error.status !== 413) throw error;
@@ -149,8 +163,10 @@ export class SupabaseSync {
     if(auth&&(!this.auth||this.auth.expires_at*1000<Date.now()+60000))await this.refreshAuth();
     const endpoint=route.split('/').at(-1);
     const download=endpoint==='travel_read'||endpoint==='travel_primary_backup'||raw;
-    const readTransport=download||['travel_head','travel_delta_read','travel_delta_receipt'].includes(endpoint);
-    const timeout=download?60_000:route.endsWith('/travel_resolve_progress')?45_000:20_000;
+    const revisionCheck=['travel_head','travel_delta_receipt'].includes(endpoint);
+    const readTransport=download||revisionCheck||endpoint==='travel_delta_read';
+    const timeout=revisionCheck||!auth?CHECK_TIMEOUT_MS:download?60_000:
+      body?.checkpoint?.encoding==='gzip-base64'||['travel_write','travel_resolve_progress'].includes(endpoint)?45_000:20_000;
     const controller=new AbortController();
     // Keep the deadline active when the server has sent headers but is still
     // transferring a larger save. This also works without AbortSignal.timeout.
@@ -166,7 +182,7 @@ export class SupabaseSync {
       if(error instanceof SyntaxError)throw new Error('同步服务返回了无法读取的数据，本机进度已保留。');
       const message=controller.signal.aborted?'同步服务响应超时，本机进度已保留。':
         '无法连接同步服务。请确认手机或电脑能访问网络，本机进度已保留。';
-      throw Object.assign(new Error(message),{readTransport});
+      throw Object.assign(new Error(message),{readTransport:readTransport&&!controller.signal.aborted});
     } finally {
       clearTimeout(timer);
     }

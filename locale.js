@@ -1,6 +1,8 @@
 // Travel controls have their own lifetime, outside the shared settings renderer.
 // Keep their original text so switching UI language also updates existing status.
 const labels=new Map([
+ ['同步在后台继续 · 可以继续练习','Sync is running in the background · keep practicing'],
+ ['此存档需要浏览器支持压缩才能同步。本机进度已保留。','This save requires browser compression to sync. Progress is saved on this device.'],
  ['导出替换前的云档','Export the previous cloud save'],['已导出替换前的云档。','Previous cloud save exported.'],['没有可导出的旧云档。','No previous cloud save is available to export.'],
  ['使用本机版本','Use this device version'],['使用云端版本','Use cloud version'],
  ['选定的版本会在同账号的设备上继续使用，替换前的存档会自动备份。','Devices on this account will continue from the chosen version. The replaced save is backed up automatically.'],
