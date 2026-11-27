@@ -162,6 +162,7 @@ export class SupabaseSync {
     if(!this.configured)throw new Error('云同步尚未配置。');
     if(auth&&(!this.auth||this.auth.expires_at*1000<Date.now()+60000))await this.refreshAuth();
     const endpoint=route.split('/').at(-1);
+    const signingIn=endpoint==='token?grant_type=password';
     const download=endpoint==='travel_read'||endpoint==='travel_primary_backup'||raw;
     const revisionCheck=['travel_head','travel_delta_receipt'].includes(endpoint);
     const readTransport=download||revisionCheck||endpoint==='travel_delta_read';
@@ -180,8 +181,9 @@ export class SupabaseSync {
       }
     } catch(error) {
       if(error instanceof SyntaxError)throw new Error('同步服务返回了无法读取的数据，本机进度已保留。');
-      const message=controller.signal.aborted?'同步服务响应超时，本机进度已保留。':
-        '无法连接同步服务。请确认手机或电脑能访问网络，本机进度已保留。';
+      const message=signingIn
+        ? controller.signal.aborted?'登录服务响应超时，本机进度已保留。':'无法连接登录服务，本机进度已保留。'
+        : controller.signal.aborted?'同步服务响应超时，本机进度已保留。':'无法连接同步服务。请确认手机或电脑能访问网络，本机进度已保留。';
       throw Object.assign(new Error(message),{readTransport:readTransport&&!controller.signal.aborted});
     } finally {
       clearTimeout(timer);
@@ -189,7 +191,11 @@ export class SupabaseSync {
     if(response.status===401&&auth&&retry){await this.refreshAuth();return this.request(route,{method,body,headers,auth,retry:false,raw});}
     if(!response.ok){
       if(response.status===409)return {conflict:true};
-      const error = new Error(response.status===400||response.status===401?'登录已失效或邮箱、密码不正确，请重新登录。':response.status===402?'云同步额度暂受限制，学习进度已保存在本机。':response.status===413?'同步空间或文件大小达到免费额度；本机进度已保留。':'同步服务暂不可用，本机进度已保留。');
+      const error = new Error(signingIn&&response.status===429?'登录尝试过多，请稍后重试。':
+        signingIn&&response.status>=500?'登录服务暂不可用，本机进度已保留。':
+        response.status===400||response.status===401?'登录已失效或邮箱、密码不正确，请重新登录。':
+        response.status===402?'云同步额度暂受限制，学习进度已保存在本机。':
+        response.status===413?'同步空间或文件大小达到免费额度；本机进度已保留。':'同步服务暂不可用，本机进度已保留。');
       error.status = response.status;
       const retryAfter = response.headers.get('Retry-After');
       if (retryAfter) error.retryUntil = /^\d+$/.test(retryAfter) ? Date.now() + Number(retryAfter)*1000 : Date.parse(retryAfter);
@@ -202,10 +208,12 @@ export class SupabaseSync {
     if(!latest?.refresh_token)throw new Error('请先登录同步账号。');
     const result=await this.request('/auth/v1/token?grant_type=refresh_token',{auth:false,body:{refresh_token:latest.refresh_token}});this.saveAuth(result);
   }
-  async signIn(email,password) {
-    const result=await this.request('/auth/v1/token?grant_type=password',{auth:false,body:{email,password}});
+  async signIn(email,password,{sync=true}={}) {
+    const result=await this.request('/auth/v1/token?grant_type=password',{auth:false,body:{email:email.trim(),password}});
     const owner=await this.meta('sync-owner');if(owner&&owner!==result.user?.id)throw new Error('这台设备已有另一账号的进度。请先导出备份，并在独立浏览器配置中使用新账号。');
-    this.saveAuth(result);await this.meta('sync-owner',result.user.id);return this.syncNow();
+    this.saveAuth(result);await this.meta('sync-owner',result.user.id);
+    this.status('已登录 · 等待同步','signed-in');
+    if(sync)return this.syncNow();
   }
   async signOut() {await this.syncNow().catch(()=>{});clearTimeout(this.timer);this.storage.removeItem(AUTH_KEY);this.auth=null;this.onCloudBackup(false);this.status('已退出同步账号，本机进度保留。','signed-out');}
   readUI() { return portableUI(parse(this.storage.getItem('multi-offline-ui'))); }
@@ -348,6 +356,7 @@ export class SupabaseSync {
 
   syncNow() {
     if (this.scheduledRun) return this.scheduledRun;
+    if (this.kind==='signed-in') this.status('已登录 · 正在后台同步进度','signed-in');
     clearTimeout(this.timer);
     const dirtySince = this.dirtySince;
     this.dirtySince = this.dirtyDue = undefined;
@@ -400,6 +409,7 @@ export class SupabaseSync {
     window.addEventListener('focus', resume);
     document.addEventListener('focusout', () => {
       if (this.dirtyDue !== undefined) this.queueAutomatic();
+      else if (this.kind==='signed-in'||this.kind==='pending') resume();
     });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') resume();
@@ -409,7 +419,10 @@ export class SupabaseSync {
       }
     });
     if (this.configured && this.auth) {
-      if (navigator.onLine) resume();
+      if (navigator.onLine) {
+        this.status('已登录 · 等待同步','signed-in');
+        resume();
+      }
       else this.status('离线学习中 · 联网后自动同步','offline');
     }
     else this.status(this.configured?'登录后自动同步手机和电脑。':'云同步等待配置；本机学习和备份可用。',this.configured?'signed-out':'unconfigured');

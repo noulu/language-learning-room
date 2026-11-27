@@ -23,6 +23,9 @@ function controls(syncConfig) {
   quickSync.innerHTML='<button type="button" id="quick-sync-now" class="quiet">立即同步</button><span id="quick-sync-status" role="status"></span>';
   shell.querySelector('.topbar').after(quickSync);
   const quickButton=quickSync.querySelector('button'),quickStatus=quickSync.querySelector('span'),settingsSync=controls.querySelector('#sync-now');
+  const loginForm=controls.querySelector('#sync-login'),loginButton=loginForm.querySelector('button'),
+    emailInput=loginForm.querySelector('#sync-email'),passwordInput=loginForm.querySelector('#sync-password');
+  emailInput.autocapitalize='none';
   const syncStatus=controls.querySelector('#sync-status'),conflictPanel=controls.querySelector('#sync-conflict'),beforeCloud=controls.querySelector('#export-before-cloud');
   const cloudExport=controls.querySelector('#export-replaced-cloud'),importButton=controls.querySelector('#import-backup');
   const choiceStatus={'cloud-choice':'已同步 · 已使用云端版本','shared-choice':'已同步 · 已采用选定的存档'};
@@ -46,11 +49,12 @@ function controls(syncConfig) {
   manager=new SupabaseSync(engine,syncConfig,{
     fetcher:nativeFetch,canApply:()=>window.travelCanReload?.()!==false,
     onStatus:(text,kind)=>{
-      if(!['synced','normal'].includes(kind))choiceReceipt=undefined;
+      if(!['synced','normal','signed-in'].includes(kind))choiceReceipt=undefined;
       const display=choiceReceipt??text;
       showStatus(display,choiceReceipt??compactSyncStatus[kind]??text);
       conflictPanel.hidden=kind!=='conflict';
-      controls.querySelector('#sync-login').hidden=Boolean(manager.auth);controls.querySelector('#sync-signout').hidden=!manager.auth;
+      loginForm.hidden=Boolean(manager.auth);controls.querySelector('#sync-signout').hidden=!manager.auth;
+      settingsSync.hidden=!manager.auth;
       quickSync.hidden=!manager.configured||!manager.auth;
       quickButton.textContent=kind==='conflict'?'处理同步冲突':'立即同步';
       if(backupUser!==manager.auth?.user?.id)void showDeviceBackup(manager.auth?.user?.id);
@@ -66,7 +70,20 @@ function controls(syncConfig) {
   let busy=false;const feedback=controls.querySelector('#backup-status');
   try{const receipt=JSON.parse(localStorage.getItem('multi-offline-last-import'));if(receipt&&Number.isInteger(receipt.reviews)&&Number.isInteger(receipt.recordings))feedback.textContent=`最近一次本机导入：${new Date(receipt.at).toLocaleString()}，${receipt.reviews.toLocaleString()} 条练习记录、${receipt.recordings} 份录音。当前保留的各语言历史见下方“已保存的累计学习记录”；云端是否完成请看上方同步状态。`;}catch{}
   const action=callback=>async event=>{event?.preventDefault();if(busy)return;busy=true;try{await callback(event);}catch(error){feedback.textContent=error.message;}finally{busy=false;}};
-  controls.querySelector('#sync-login').onsubmit=action(async()=>{const email=controls.querySelector('#sync-email').value,password=controls.querySelector('#sync-password').value;controls.querySelector('#sync-password').value='';controls.querySelector('#sync-login button').focus();await manager.signIn(email,password);});
+  loginForm.onsubmit=action(async()=>{
+    if(loginForm.contains(document.activeElement))document.activeElement.blur();
+    loginButton.disabled=true;
+    manager.status('正在登录…','signing-in');
+    try{
+      await manager.signIn(emailInput.value,passwordInput.value,{sync:false});
+      passwordInput.value='';
+      void manager.syncNow().catch(()=>{});
+    }catch(error){
+      manager.status(error.message,'error');
+    }finally{
+      loginButton.disabled=false;
+    }
+  });
   const manualSync=action(async()=>{
     choiceReceipt=undefined;
     quickButton.disabled=settingsSync.disabled=true;
