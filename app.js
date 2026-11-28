@@ -6,6 +6,7 @@ import './travel-transfer.js';
 import { arabicDisplay } from './arabic-vowels.js';
 import { arabicTransliteration } from './arabic-transliteration.js';
 import { mnemonicMarkup, mnemonicCoverage } from './word-mnemonics.js';
+import { verbTableMarkup } from './verb-tables.js';
 import { DeviceSpeech } from './device-speech.js';
 import { renderPracticeMarkup, renderExampleMarkup } from './practice-motion.js';
 const deviceSpeech=new DeviceSpeech();
@@ -296,8 +297,13 @@ function renderPractice() {
     $('#review-return').hidden=!['recent-words','recent-paragraphs'].includes(session?.purpose);$('#review-return').textContent=uiLanguage==='zh'?'返回普通输入':'Return to regular input';
   }
   const item = task();
+  const wordStage = item && Number(item.practiceStage || item.stage || state.selectedStage) <= 2;
+  const grammar = wordStage && revealed ? verbTableMarkup(item,state.selectedLanguage,uiLanguage) : '';
+  const grammarRegion = $('#practice-grammar');
+  grammarRegion.innerHTML = grammar;
+  grammarRegion.hidden = !grammar;
   $('#practice').classList.toggle('revealed-practice',Boolean(item && revealed));
-  $('#practice').classList.toggle('word-practice',Boolean(item && Number(item.practiceStage || item.stage || state.selectedStage)<=2));
+  $('#practice').classList.toggle('word-practice',Boolean(wordStage));
   const previousScroll = $('#practice').dataset.taskId === item?.id ? $('#practice .card-center')?.scrollTop || 0 : 0;
   $('#practice').dataset.taskId = item?.id || '';
   if (!item && session?.purpose === 'recent-paragraphs') {
@@ -735,6 +741,7 @@ async function lookup(entryId) {
     const context = result.context;
     const contextText = typeof context === 'string' ? context : context?.status === 'annotated' && context.tokens?.length ? context.tokens.filter(token => token.function).map(token => `${token.text}: ${token.function}`).join('\n') : context?.function || context?.note || context?.text || context?.explanation;
     $('#dictionary-body').innerHTML = `<h3 lang="${esc(state.selectedLanguage)}" dir="${isArabic() ? 'rtl' : 'auto'}">${targetMarkup(entry.display || entry.lemma, entry.japaneseReadings, true, entry.arabicVocalization, entry.transliterations)}</h3><div class="panel-note">${esc(entry.ipa || '')}</div>${hanjaMarkup(entry)}${translatedMarkup(entry.meanings, 'meanings', entry.helperTranslationProvenance, entry.japaneseReadings)}<dl>${entry.lemma ? `<dt>${esc(t('lemma'))}</dt><dd>${targetMarkup(entry.lemma, entry.japaneseReadings, true, entry.arabicVocalization, entry.transliterations)}</dd>` : ''}${entry.pos ? `<dt>${esc(t('pos'))}</dt><dd>${esc(entry.pos)}</dd>` : ''}${entry.forms?.length ? `<dt>${esc(t('forms'))}</dt><dd>${entry.forms.map(form => targetMarkup(typeof form === 'string' ? form : form.text, entry.japaneseReadings, true, null, entry.transliterations) + (typeof form === 'object' && form.description ? ` · ${esc(form.description)}` : '')).join('<br>')}</dd>` : ''}<dt>${esc(t('context'))}</dt><dd>${isArabic()?targetMarkup(contextText || t('noContext')):esc(contextText || t('noContext'))}</dd>${entry.quality ? `<dt>${esc(t('quality'))}</dt><dd>${esc(entry.quality)}</dd>` : ''}</dl>${entry.sourceIds?.length ? `<p class="panel-note">${esc(t('sourceIds'))}: ${entry.sourceIds.map(esc).join(', ')}</p>` : ''}`;
+    $('#dictionary-body').insertAdjacentHTML('beforeend', verbTableMarkup(entry,state.selectedLanguage,uiLanguage));
   } catch (error) { if (token === lookupToken) $('#dictionary-body').textContent = error.message; }
 }
 
