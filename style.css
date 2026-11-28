@@ -217,6 +217,9 @@ a { color: var(--green); }
 .verb-cells > li { display: grid; align-content: center; justify-content: start; min-width: 0; padding: 5px 8px; background: var(--white); overflow-wrap: anywhere; }
 .verb-cells.cols-1 > li { grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); align-items: center; gap: 6px; }
 .verb-cells > .verb-match { background: var(--verb-fill); }
+.verb-cells > .verb-empty { background: var(--paper); color: var(--muted); }
+.verb-variant { display: grid; }
+.verb-tables > .verb-source { margin: 8px 0 0; }
 .verb-cell-label { color: var(--muted); font-size: 11px; line-height: 1.3; }
 .verb-cells strong { color: var(--verb-ink); font-weight: 600; font-size: 16px; line-height: 1.35; }
 .word-example { min-width: 0; padding: 14px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); line-height: 1.65; }

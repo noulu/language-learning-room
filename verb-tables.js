@@ -1,4 +1,5 @@
 import { escapeHTML as esc } from './core.js';
+import { verbReferenceData, verbReferenceTables } from './verb-reference-data.js';
 
 function normalize(text, language) {
   const word = String(text ?? '').trim().normalize('NFC').toLowerCase();
@@ -29,6 +30,16 @@ const title = {
   koPast: ['日常礼貌体 · 过去', 'Casual-polite · past', 'past'],
   habitual: ['习惯体', 'Habitual aspect', 'form'],
   markers: ['动词前的词', 'Words before the verb', 'form'],
+  clitic: ['不定式 · 附加代词', 'Infinitive · attached pronoun', 'form'],
+  presentation: ['引出眼前的人或物', 'Presentative forms', 'form'],
+  idCopula: ['定义或辨认', 'Defining or identifying', 'form'],
+  modal: ['情态动词', 'Modal verb', 'form'],
+  modalPast: ['情态动词 · 过去语境', 'Modal verb · past context', 'past'],
+  negPresent: ['现在时 · 否定', 'Present · negative', 'present'],
+  negPast: ['过去时 · 否定', 'Past · negative', 'past'],
+  suggestion: ['建议 · 第一人称复数', 'Suggestion · first-person plural', 'form'],
+  arSubj: ['主动 · 非过去 · 虚拟式', 'Active non-past · subjunctive', 'present'],
+  arJussive: ['主动 · 非过去 · 切格', 'Active non-past · jussive', 'present'],
 };
 
 const esPeople = ['yo', 'nosotros', 'tú', 'vosotros', 'él / ella / usted', 'ellos / ellas / ustedes'];
@@ -52,6 +63,7 @@ function affixes(key, labels, endings, stem, columns) {
 
 const spanish = new Set(words('hablar trabajar estudiar tomar llevar pasar llamar usar cambiar ayudar caminar necesitar comer beber aprender vender correr vivir escribir subir abrir buscar pagar llegar'));
 function spanishTables(lemma) {
+  if (lemma === 'haber') return [affixes('present', esPeople, words('e emos as abéis a an'), 'h')];
   if (!spanish.has(lemma)) return [];
   const stem = lemma.slice(0, -2), type = lemma.slice(-2), ar = type === 'ar', er = type === 'er';
   const spelling = ending => ending.startsWith('e') || ending.startsWith('é')
@@ -200,6 +212,78 @@ const providers = { es: spanishTables, fr: frenchTables, ru: russianTables, en: 
 const previewKeys = { es: ['present', 'preterite', 'imperfect'], fr: ['present', 'imperfect', 'compound'], ko: ['koPolite', 'koPast'] };
 const aliases = { hi: { 'है': 'होना', 'हैं': 'होना' }, ko: { '해라': '하다' } };
 
+const enFixed = {
+  would: ['modal', ['条件、委婉或过去习惯', 'Conditions, politeness or past habits']],
+  "don't": ['negPresent', 'I / you / we / they', '-n’t'],
+  "can't": ['modal', ['否定能力或可能性', 'Negative ability or possibility'], '-n’t'],
+  "didn't": ['negPast', ['各人称', 'All persons'], '-n’t'],
+  "doesn't": ['negPresent', 'he / she / it', '-n’t'],
+  "won't": ['modal', ['将来或意愿 · 否定', 'Future or willingness · negative'], '-n’t'],
+  "wouldn't": ['modal', ['条件或过去意愿 · 否定', 'Condition or past willingness · negative'], '-n’t'],
+  "let's": ['suggestion', ['我们一起做', 'Let us do it'], '-’s'],
+  cannot: ['modal', ['否定能力或可能性', 'Negative ability or possibility'], '-not'],
+  "haven't": ['negPresent', 'I / you / we / they', '-n’t'],
+  "couldn't": ['modal', ['能力或可能性 · 否定', 'Ability or possibility · negative'], '-n’t'],
+  "aren't": ['negPresent', 'you / we / they', '-n’t'],
+};
+
+function fixedTables(display, language) {
+  if (language === 'en' && enFixed[display]) {
+    const [key, label, ending = ['固定形式', 'Fixed form']] = enFixed[display];
+    const tables = [panel(key, [label], [ending], [display], 1)];
+    if (display === 'would') tables.push(panel('modalPast', [['间接引语中的 will', 'Reported will']], [ending], [display], 1));
+    if (display === "aren't") tables.push(panel('negPresent', [['I · 用于问句', 'I · in questions']], [ending], [display], 1));
+    return tables;
+  }
+  if (language === 'es' && ['hacerlo', 'darle'].includes(display)) {
+    return [panel('clitic', [display === 'hacerlo' ? ['直接宾语', 'Direct object'] : ['间接宾语', 'Indirect object']], [suffix(display.slice(-2))], [display], 1)];
+  }
+  if (language === 'fr' && ['voici', 'voilà'].includes(display)) {
+    return [panel('presentation', [['这里', 'Here'], ['那里', 'There']], ['-ci', '-là'], ['voici', 'voilà'])];
+  }
+  if (language === 'ja') {
+    if (['だ', 'です'].includes(display)) return [panel('jaPolite', [['普通体', 'Plain'], ['礼貌体', 'Polite']], ['-だ', '-です'], ['だ', 'です'])].map(table => ({ ...table, zh: '判断词 · 非过去', en: 'Copula · non-past' }));
+    if (display === '下さい') return [panel('command', [['礼貌请求', 'Polite request']], ['-い'], ['下さい'], 1)];
+  }
+  if (language === 'ar' && display === 'يكونوا') {
+    return ['arSubj', 'arJussive'].map(key => panel(key, ['هم'], ['يَـ … ـُوا'], ['يَكُونُوا'], 1));
+  }
+  if (language === 'id' && ['bisa', 'mau', 'adalah'].includes(display)) {
+    if (display === 'adalah') return [panel('idCopula', [['肯定定义', 'Affirmative definition'], ['否定名词谓语', 'Negating a noun predicate']],
+      [['固定形式', 'Fixed form'], 'bukan'], ['adalah', 'bukan'], 1)];
+    const label = display === 'bisa' ? ['能力／可能', 'Ability or possibility'] : ['意愿／打算', 'Willingness or intention'];
+    return [panel('modal', [label], [['动词前使用', 'Goes before the verb']], [display], 1)];
+  }
+  return [];
+}
+
+const posSlots = {
+  es: new Map(esPeople.map((label, i) => [label, i]).concat([['usted', 4], ['ustedes', 5], ['vos', 2]])),
+  fr: new Map(frPeople.map((label, i) => [label, i]).concat([['il / elle', 4], ['ils', 5]])),
+  ru: new Map(['я', 'мы', 'ты', 'вы', 'он / она / оно', 'они'].map((label, i) => [label, i])),
+  ar: new Map([['أنا', 0], ['نحن', 2], ['أنتَ', 3], ['أنتما', 4], ['أنتم', 5], ['أنتِ', 6], ['أنتنّ', 8],
+    ['هو', 9], ['هما (م)', 10], ['هما · مذكر', 10], ['هم', 11], ['هي', 12], ['هما (ف)', 13], ['هما · مؤنث', 13], ['هنّ', 14]]),
+};
+
+function useFixedPositions(table, language) {
+  const slots = posSlots[language];
+  if (!slots || !table.cells.every(cell => slots.has(cell.label[0]))) return table;
+  const ar = language === 'ar';
+  const grid = Array.from({ length: ar ? 15 : 6 }, () => []);
+  for (const cell of table.cells) grid[slots.get(cell.label[0])].push(cell);
+  return { ...table, columns: ar ? 3 : 2, cells: grid.map(cells => cells.length < 2 ? cells[0] ?? { empty: true }
+    : { variants: cells, selected: cells.some(cell => cell.selected) }) };
+}
+
+function referenceFor(entry) {
+  const row = verbReferenceData[entry.entryId ?? entry.id];
+  if (!row || row.display !== entry.display || row.lemma !== entry.lemma) return [];
+  return row.tables.map(([index, selected]) => {
+    const table = verbReferenceTables[index];
+    return { ...table, source: true, cells: table.cells.map((cell, i) => ({ ...cell, selected: selected.includes(i) })) };
+  });
+}
+
 function matchesForm(form, display, rawDisplay, language) {
   if (normalize(form, language) !== display) return false;
   if (language !== 'ar') return true;
@@ -213,19 +297,33 @@ export function verbTables(entry, language) {
   const display = normalize(entry.display, language), sourceLemma = normalize(entry.lemma, language);
   const lemma = aliases[language]?.[sourceLemma] ?? sourceLemma;
   if (!display || !lemma) return [];
-  const tables = provider(lemma);
+  let tables = [...fixedTables(display, language), ...provider(lemma)];
+  if (language === 'ja' && display === '説明' && lemma === '説明') tables = [
+    affixes('jaPolite', polarity, words('ます ません'), '説明し', 1), affixes('jaPast', polarity, words('ました ませんでした'), '説明し', 1),
+  ];
   const matched = tables.map(table => ({ ...table, cells: table.cells.map(cell => ({ ...cell,
     selected: cell.forms.some(form => matchesForm(form, display, entry.display, language)),
   })) })).filter(table => table.cells.some(cell => cell.selected));
-  if (matched.length || display !== lemma) return matched;
-  return tables.filter(table => !previewKeys[language] || previewKeys[language].includes(table.key));
+  let curated = matched.length || display !== lemma ? matched : tables.filter(table => !previewKeys[language] || previewKeys[language].includes(table.key));
+  if (language === 'hi' && ['है', 'हैं'].includes(display)) return curated;
+  const reference = referenceFor(entry);
+  if (language === 'ar' && reference.some(table => table.key === 'ar-past-active-indicative')) curated = curated.filter(table => table.key !== 'past');
+  const sourced = reference.filter(table => !curated.some(existing => existing.key === table.key &&
+    (!table.lemma || normalize(table.lemma, language) === lemma)));
+  return [...curated, ...sourced].map(table => useFixedPositions(table, language));
 }
 
 export function verbTableMarkup(entry, language, ui = 'zh') {
   const tables = verbTables(entry, language);
   if (!tables.length) return '';
-  const zh = ui === 'zh', columnsLabel = zh ? '入门语法形式' : 'Starter grammatical forms';
+  const zh = ui === 'zh', locale = zh ? 0 : 1, columnsLabel = zh ? '动词语法表' : 'Verb forms';
   const preview = tables.every(table => table.cells.every(cell => !cell.selected));
   const caption = preview ? (zh ? '原形卡 · 下表供查阅' : 'Dictionary form · tables for reference') : '';
-  return `<section class="verb-tables" lang="${zh ? 'zh' : 'en'}" aria-label="${esc(columnsLabel)}"><h3>${esc(columnsLabel)}</h3>${caption ? `<p>${esc(caption)}</p>` : ''}<div class="verb-table-list">${tables.map(table => `<figure class="verb-table" data-tone="${table.tone}" data-grammar="${table.key}"><figcaption>${esc(zh ? table.zh : table.en)}</figcaption><ul class="verb-cells cols-${table.columns}" role="list">${table.cells.map(cell => `<li${cell.selected ? ' class="verb-match"' : ''}><bdi class="verb-cell-label" dir="auto">${esc(cell.label[zh ? 0 : 1])}</bdi><strong>${Array.isArray(cell.ending) ? esc(cell.ending[zh ? 0 : 1]) : `<bdi lang="${esc(language)}" dir="${language === 'ar' ? 'rtl' : 'auto'}">${esc(cell.ending)}</bdi>`}</strong>${cell.selected ? `<span class="sr-only">${zh ? '当前词形' : 'Current form'}</span>` : ''}</li>`).join('')}</ul></figure>`).join('')}</div></section>`;
+  const part = cell => `<bdi class="verb-cell-label" dir="auto">${esc(cell.label[locale])}</bdi><strong>${Array.isArray(cell.ending)
+    ? esc(cell.ending[locale]) : `<bdi lang="${esc(language)}" dir="${language === 'ar' ? 'rtl' : 'auto'}">${esc(cell.ending)}</bdi>`}</strong>${cell.selected ? `<span class="sr-only">${zh ? '当前词形' : 'Current form'}</span>` : ''}`;
+  const cellMarkup = cell => cell.empty ? `<li class="verb-empty" aria-label="${zh ? '无此形式' : 'No form'}">—</li>`
+    : `<li${cell.selected ? ' class="verb-match"' : ''}>${cell.variants ? cell.variants.map(variant => `<div class="verb-variant">${part(variant)}</div>`).join('') : part(cell)}</li>`;
+  const figures = tables.map(table => `<figure class="verb-table" data-tone="${table.tone}" data-grammar="${table.key}"><figcaption>${esc(zh ? table.zh : table.en)}${table.lemma ? ` <bdi>${esc(table.lemma)}</bdi>` : ''}</figcaption><ul class="verb-cells cols-${table.columns}" role="list">${table.cells.map(cellMarkup).join('')}</ul></figure>`);
+  const source = tables.some(table => table.source) ? `<p class="verb-source"><a href="https://en.wiktionary.org/wiki/${esc(encodeURIComponent(entry.lemma))}" target="_blank" rel="noopener noreferrer">${zh ? '变位资料：英语维基词典贡献者' : 'Forms: English Wiktionary contributors'}</a> · <a href="https://creativecommons.org/licenses/by-sa/4.0/" target="_blank" rel="noopener noreferrer">CC BY-SA 4.0</a></p>` : '';
+  return `<section class="verb-tables" lang="${zh ? 'zh' : 'en'}" aria-label="${esc(columnsLabel)}"><h3>${esc(columnsLabel)}</h3>${caption ? `<p>${esc(caption)}</p>` : ''}<div class="verb-table-list">${figures.join('')}</div>${source}</section>`;
 }
