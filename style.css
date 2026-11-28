@@ -240,8 +240,13 @@ a { color: var(--green); }
   .revealed-practice .card-center > .answer { border-top: 0; border-inline-start: 1px solid var(--line); padding: 8px 0 8px 24px; }
   .word-answer-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
   .word-answer-layout > .answer { border-inline-start: 1px solid var(--line); padding-inline-start: 20px; }
-  .word-practice .word-mnemonic { padding: 12px 14px; }
+  .word-practice .practice-question > .word-mnemonic { padding: 8px 12px; margin-top: 8px; }
+  .word-practice .word-mnemonic h3, .word-practice .word-mnemonic .mnemonic-cue { margin-bottom: 4px; }
+  .word-practice .word-mnemonic .mnemonic-note { margin-top: 6px; }
   .word-practice .word-mnemonic .mnemonic-cue, .word-practice .word-mnemonic .mnemonic-story { font-size: 14px; }
+}
+@media (min-width: 1000px) and (max-height: 760px) {
+  .practice.word-practice { height: clamp(400px, calc(100svh - 125px), 620px); }
 }
 @media (min-width: 651px) and (max-width: 999px) {
   .practice { height: clamp(400px, calc(100svh - 150px), 680px); }
